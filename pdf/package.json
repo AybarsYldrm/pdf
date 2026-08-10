@@ -1,8 +1,0 @@
-{
-  "dependencies": {
-    "@fitfak/pades": "^1.0.0",
-    "@fitfak/pdf": "^1.0.0",
-    "@fitfak/qr": "^1.0.0",
-    "@fitfak/ssl": "^2.1.0"
-  }
-}
