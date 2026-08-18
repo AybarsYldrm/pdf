@@ -1,8 +1,26 @@
 {
-  "dependencies": {
-    "@fitfak/pades": "^1.0.0",
-    "@fitfak/pdf": "^1.0.0",
-    "@fitfak/qr": "^1.0.0",
-    "@fitfak/ssl": "^2.1.0"
+  "name": "fitfak-belge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PAdES B-LTA imzalama, LTV, PDF üretimi ve belge stüdyosu — yalnızca Node.js dahili modülleri ile",
+  "license": "MIT",
+  "author": {
+    "name": "Aybars Yıldırım",
+    "email": "network@fitfak.net",
+    "url": "https://aybars.net.tr"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "node --test test/unit/",
+    "test:e2e": "node --test test/e2e/",
+    "test:all": "node --test test/",
+    "start": "node apps/server/server.js",
+    "example": "node examples/01-multi-sign.js"
   }
 }

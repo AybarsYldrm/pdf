@@ -962,6 +962,109 @@ function _setAppearance(dictStr, appearanceRef){
  *  - Boş /Sig field + görünmez Widget (/Parent=field, /P=page),
  *  - 1. sayfanın /Annots'una widget referansı eklenir (gerçek /Page objesi!).
  */
+/** PDF tarih dizgisi literali: (D:YYYYMMDDHHMMSSZ) */
+function _pdfDateLiteral(d){
+  const pad = (x) => String(x).padStart(2, '0');
+  return '(D:' + d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
+         pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + 'Z)';
+}
+
+/**
+ * Bir imza /Contents onaltılık dizgisinden VRI anahtarlarını üretir.
+ *
+ * ETSI EN 319 142-2, VRI anahtarını imza /Contents oktet dizisinin SHA-1 özeti
+ * olarak tanımlar. Uygulamada iki yorum dolaşımdadır: dolgu sıfırları dahil ve
+ * gerçek ASN.1 uzunluğuna kırpılmış. Doğrulayıcılar arasında uyum için ikisi de
+ * üretilir ve aynı VRI nesnesine bağlanır.
+ *
+ * @param {string} contentsHex
+ * @returns {string[]} büyük harf onaltılık SHA-1 değerleri (tekilleştirilmiş)
+ */
+function vriKeysFromContentsHex(contentsHex){
+  const withZeros = Buffer.from(contentsHex, 'hex');
+  const padded = crypto.createHash('sha1').update(withZeros).digest('hex').toUpperCase();
+
+  let actualLength = withZeros.length;
+  if (withZeros[0] === 0x30) {
+    let len = withZeros[1];
+    let offset = 2;
+    if (len & 0x80) {
+      const numBytes = len & 0x7F;
+      len = 0;
+      for (let i = 0; i < numBytes; i++) len = (len << 8) | withZeros[offset++];
+    }
+    actualLength = offset + len;
+  }
+  if (actualLength <= 0 || actualLength > withZeros.length) actualLength = withZeros.length;
+  const unpadded = crypto.createHash('sha1')
+    .update(withZeros.slice(0, actualLength)).digest('hex').toUpperCase();
+
+  return padded === unpadded ? [padded] : [padded, unpadded];
+}
+
+/**
+ * PDF'teki TÜM imza sözlüklerini (onay imzaları + belge zaman damgaları) bulur.
+ *
+ * Eski `getLastSignatureHashes()` yalnız SON imzayı görüyordu; çoklu imzalı
+ * belgelerde bu, önceki imzaların VRI girdisi olmaması demekti.
+ *
+ * @param {Buffer} pdfBuffer
+ * @returns {Array<{ contentsHex:string, cmsDer:Buffer, vriKeys:string[],
+ *                   subFilter:string|null, type:string|null, byteRange:number[]|null }>}
+ */
+function findAllSignatures(pdfBuffer){
+  const pdfStr = pdfBuffer.toString('latin1');
+  const out = [];
+  const seen = new Set();
+
+  // /Type /Sig veya /Type /DocTimeStamp taşıyan sözlükleri yakala.
+  const re = /\/Type\s*\/(Sig|DocTimeStamp)\b([\s\S]{0,4000}?)\/Contents\s*<([0-9A-Fa-f]*)>/g;
+  let m;
+  while ((m = re.exec(pdfStr)) !== null) {
+    const type = m[1];
+    const head = m[2];
+    const contentsHex = m[3];
+    if (!contentsHex || seen.has(contentsHex)) continue;
+    seen.add(contentsHex);
+
+    const subFilterMatch = /\/SubFilter\s*\/([A-Za-z0-9._\-]+)/.exec(head);
+    const byteRangeMatch = /\/ByteRange\s*\[([^\]]*)\]/.exec(head);
+    const byteRange = byteRangeMatch
+      ? byteRangeMatch[1].trim().split(/\s+/).map(Number).filter((n) => Number.isFinite(n))
+      : null;
+
+    const withZeros = Buffer.from(contentsHex, 'hex');
+    let cmsLen = withZeros.length;
+    if (withZeros[0] === 0x30) {
+      let len = withZeros[1];
+      let off = 2;
+      if (len & 0x80) {
+        const n = len & 0x7F;
+        len = 0;
+        for (let i = 0; i < n; i++) len = (len << 8) | withZeros[off++];
+      }
+      cmsLen = off + len;
+    }
+    if (cmsLen <= 0 || cmsLen > withZeros.length) cmsLen = withZeros.length;
+
+    const subFilter = subFilterMatch ? subFilterMatch[1] : null;
+    // Sınıflandırmada SubFilter, /Type'tan daha güvenilirdir: başka araçlarla
+    // üretilmiş belgelerde belge zaman damgası /Type /Sig taşıyabiliyor.
+    const resolvedType = (subFilter === 'ETSI.RFC3161') ? 'DocTimeStamp' : type;
+
+    out.push({
+      contentsHex,
+      cmsDer: withZeros.slice(0, cmsLen),
+      vriKeys: vriKeysFromContentsHex(contentsHex),
+      subFilter,
+      type: resolvedType,
+      rawType: type,
+      byteRange
+    });
+  }
+  return out;
+}
+
 function ensureAcroFormAndEmptySigField(pdfBuffer, fieldName){
   const requestedName = (typeof fieldName === 'string' && fieldName.length > 0) ? fieldName : null;
   const fieldLabel = requestedName || 'Sig1';
@@ -1095,9 +1198,16 @@ class PDFPAdESWriter {
       );
     }
     
-    // ETSI KURALI: /P referansı /Sig sözlüğünde kesinlikle yer almamalıdır!
-    const sigDict = '<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /' + subFilter + 
-                    ' /ByteRange [' + BR + '] /Contents <' + placeholderHex + '> /M (' + dateStr + ')' +
+    // ISO 32000-2 §12.8.5: SubFilter ETSI.RFC3161 ise bu bir BELGE ZAMAN DAMGASIDIR
+    // ve sözlüğün /Type değeri /DocTimeStamp olmalıdır. Ayrıca /M (imza zamanı)
+    // konulmaz — güvenilir zaman, zaman damgası jetonunun içindedir.
+    const isDocTimeStamp = subFilter === 'ETSI.RFC3161';
+    const typeName = isDocTimeStamp ? '/DocTimeStamp' : '/Sig';
+    const mEntry = isDocTimeStamp ? '' : ' /M (' + dateStr + ')';
+
+    // ETSI KURALI: /P referansı imza sözlüğünde kesinlikle yer almamalıdır!
+    const sigDict = '<< /Type ' + typeName + ' /Filter /Adobe.PPKLite /SubFilter /' + subFilter +
+                    ' /ByteRange [' + BR + '] /Contents <' + placeholderHex + '>' + mEntry +
                     (extraEntries.length ? ' ' + extraEntries.join(' ') : '') + ' >>';
     const fieldOrig = readObject(this.pdf, fieldObjNum);
     const newFieldDictStr = this._injectV(fieldOrig.dictStr, sigObjNum + ' 0 R');
@@ -1204,15 +1314,14 @@ class PDFPAdESWriter {
       pageRefStr = null;
     }
     const placeholderHex = new Array(placeholderHexLen + 1).join('0');
-    const dateStr = this._pdfDate(new Date());
     const BR = '0000000000 0000000000 0000000000 0000000000';
-    
-    // SİLİNECEK KISIM:
-    // const pPart = pageRefStr ? (' /P ' + pageRefStr) : '';
-    
-    // DÜZELTİLMİŞ ETSI UYUMLU KOD:
-    const sigDict = '<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.RFC3161' + 
-                    ' /ByteRange [' + BR + '] /Contents <' + placeholderHex + '> /M (' + dateStr + ') >>';
+
+    // ISO 32000-2 §12.8.5: belge zaman damgası sözlüğünün /Type değeri
+    // /DocTimeStamp olmalıdır (/Sig değil). /M girdisi de konulmaz — güvenilir
+    // zaman, zaman damgası jetonunun (TSTInfo.genTime) içindedir; sözlükte ayrı
+    // bir tarih taşımak çelişkili iki zaman kaynağı yaratır.
+    const sigDict = '<< /Type /DocTimeStamp /Filter /Adobe.PPKLite /SubFilter /ETSI.RFC3161' +
+                    ' /ByteRange [' + BR + '] /Contents <' + placeholderHex + '> >>';
     const rootObj = readObject(this.pdf, this.rootObjNum);
     if (!rootObj || !rootObj.dictStr) {
       throw new Error('Root object not found while preparing DocTimeStamp placeholder.');
@@ -1429,9 +1538,11 @@ class PDFPAdESWriter {
    * @param {Buffer[]} crlsDer  - Gömülecek CRL'lerin DER baytları
    * @param {Buffer[]} ocspsDer - Gömülecek BasicOCSPResponse DER baytları
    */
-    addDSS({ certsDer = [], crlsDer = [], ocspsDer = [], signatureHashes = null } = {}){
-    if (!certsDer.length && !crlsDer.length && !ocspsDer.length) {
-      return { dssObjNum: null, certsTotal: 0, crlsTotal: 0, ocspsTotal: 0 };
+    addDSS({ certsDer = [], crlsDer = [], ocspsDer = [], signatureHashes = null, vri = null } = {}){
+    const hasVriPayload = Array.isArray(vri) && vri.some((e) =>
+      (e.certsDer && e.certsDer.length) || (e.crlsDer && e.crlsDer.length) || (e.ocspsDer && e.ocspsDer.length));
+    if (!certsDer.length && !crlsDer.length && !ocspsDer.length && !hasVriPayload) {
+      return { dssObjNum: null, certsTotal: 0, crlsTotal: 0, ocspsTotal: 0, vriTotal: 0 };
     }
 
     const rootObj = readObject(this.pdf, this.rootObjNum);
@@ -1491,17 +1602,52 @@ class PDFPAdESWriter {
     const newCrlRefs = addStreamEntries(crlsDer);
     const newOcspRefs = addStreamEntries(ocspsDer);
 
-    // YENİ: VRI Objesini (Dictionary) Oluşturuyoruz
-    let vriObjNum = null;
-    if (signatureHashes && signatureHashes.length > 0) {
-        vriObjNum = allocateObj();
-        let vriDict = '<< /Type /VRI';
-        if (newCertRefs.length) vriDict += ` /Cert [ ${newCertRefs.join(' ')} ]`;
-        if (newCrlRefs.length) vriDict += ` /CRL [ ${newCrlRefs.join(' ')} ]`;
-        if (newOcspRefs.length) vriDict += ` /OCSP [ ${newOcspRefs.join(' ')} ]`;
-        vriDict += ' >>';
-        
-        newObjs.push({ objNum: vriObjNum, contentStr: vriDict });
+    // ── VRI sözlükleri ───────────────────────────────────────────────
+    // İki kullanım biçimi desteklenir:
+    //   (a) `signatureHashes` verilir  → TEK bir VRI objesi üretilir ve bu üst
+    //       düzey DER dizilerini gösterir. (Eski davranış, geriye dönük uyum.)
+    //   (b) `vri` dizisi verilir       → HER İMZA İÇİN ayrı VRI objesi üretilir,
+    //       her biri yalnız kendi doğrulama verisini gösterir. ETSI EN 319 142-1
+    //       çoklu imzalı belgelerde bunu gerektirir.
+    const vriBindings = []; // { hashes: string[], objNum: number }
+
+    if (Array.isArray(vri) && vri.length > 0) {
+      for (const entry of vri) {
+        const hashes = Array.isArray(entry.hashes) ? entry.hashes.filter(Boolean) : [];
+        if (!hashes.length) continue;
+        const certRefs = addStreamEntries(entry.certsDer || []);
+        const crlRefs  = addStreamEntries(entry.crlsDer || []);
+        const ocspRefs = addStreamEntries(entry.ocspsDer || []);
+        if (!certRefs.length && !crlRefs.length && !ocspRefs.length) continue;
+
+        const objNum = allocateObj();
+        let dict = '<< /Type /VRI';
+        if (certRefs.length) dict += ` /Cert [ ${certRefs.join(' ')} ]`;
+        if (crlRefs.length)  dict += ` /CRL [ ${crlRefs.join(' ')} ]`;
+        if (ocspRefs.length) dict += ` /OCSP [ ${ocspRefs.join(' ')} ]`;
+        // /TU: bu doğrulama verisinin toplandığı zaman (ETSI EN 319 142-2 tavsiyesi)
+        dict += ' /TU ' + _pdfDateLiteral(entry.validationTime || new Date());
+        dict += ' >>';
+        newObjs.push({ objNum, contentStr: dict });
+
+        // VRI'nin gösterdiği nesneler üst düzey /Certs /CRLs /OCSPs içinde de
+        // listelenmelidir (bazı doğrulayıcılar yalnız üst düzeye bakar).
+        newCertRefs.push(...certRefs);
+        newCrlRefs.push(...crlRefs);
+        newOcspRefs.push(...ocspRefs);
+
+        vriBindings.push({ hashes, objNum });
+      }
+    } else if (signatureHashes && signatureHashes.length > 0) {
+      const objNum = allocateObj();
+      let dict = '<< /Type /VRI';
+      if (newCertRefs.length) dict += ` /Cert [ ${newCertRefs.join(' ')} ]`;
+      if (newCrlRefs.length)  dict += ` /CRL [ ${newCrlRefs.join(' ')} ]`;
+      if (newOcspRefs.length) dict += ` /OCSP [ ${newOcspRefs.join(' ')} ]`;
+      dict += ' /TU ' + _pdfDateLiteral(new Date());
+      dict += ' >>';
+      newObjs.push({ objNum, contentStr: dict });
+      vriBindings.push({ hashes: signatureHashes, objNum });
     }
 
     const allCertRefs = existingCertRefs.concat(newCertRefs);
@@ -1514,20 +1660,19 @@ class PDFPAdESWriter {
     if (allCrlRefs.length) parts.push('/CRLs [ ' + allCrlRefs.join(' ') + ' ]');
     if (allOcspRefs.length) parts.push('/OCSPs [ ' + allOcspRefs.join(' ') + ' ]');
 
-    // YENİ: VRI Sözlüğünü DSS'in içine bağlıyoruz
-    // YENİ: VRI Sözlüğünü DSS'in içine bağlıyoruz
-    let vriEntries = [];
+    // VRI sözlüğünü DSS'e bağla. Bu turda yenilenen hash'ler eskisini ezer.
+    const refreshedHashes = new Set();
+    for (const b of vriBindings) for (const h of b.hashes) refreshedHashes.add(h);
+
+    const vriEntries = [];
     for (const [hash, ref] of Object.entries(existingVriRefs)) {
-        if (!signatureHashes || !signatureHashes.includes(hash)) vriEntries.push(`/${hash} ${ref}`);
+      if (!refreshedHashes.has(hash)) vriEntries.push(`/${hash} ${ref}`);
     }
-    if (signatureHashes && vriObjNum) {
-        // Hem sıfırlı hem sıfırsız hash'i Adobe için haritaya işliyoruz
-        for (const hash of signatureHashes) {
-            vriEntries.push(`/${hash} ${vriObjNum} 0 R`);
-        }
+    for (const b of vriBindings) {
+      for (const hash of b.hashes) vriEntries.push(`/${hash} ${b.objNum} 0 R`);
     }
     if (vriEntries.length > 0) {
-        parts.push(`/VRI << ${vriEntries.join(' ')} >>`);
+      parts.push(`/VRI << ${vriEntries.join(' ')} >>`);
     }
 
     const dssDict = '<< ' + parts.join(' ') + ' >>';
@@ -1555,7 +1700,8 @@ class PDFPAdESWriter {
       dssObjNum,
       certsTotal: allCertRefs.length,
       crlsTotal: allCrlRefs.length,
-      ocspsTotal: allOcspRefs.length
+      ocspsTotal: allOcspRefs.length,
+      vriTotal: vriBindings.length
     };
   }
 
@@ -1703,5 +1849,7 @@ module.exports = {
   PDFPAdESWriter,
   ensureAcroFormAndEmptySigField,
   readLastTrailer,
-  readObject
+  readObject,
+  findAllSignatures,
+  vriKeysFromContentsHex
 };
