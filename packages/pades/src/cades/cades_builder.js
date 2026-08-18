@@ -206,6 +206,96 @@ function buildCAdES_BES_auto(tbsHash, keyPem, leafCertPem, chainCertPems = [], p
   return { cmsBES, signerInfo, signatureValue: signature, hashName, keyType, leafDer, chainDer, signedAttrs };
 }
 
+/**
+ * `buildCAdES_BES_auto`'nun Signer arayüzü kullanan asenkron ikizi.
+ *
+ * Fark yalnız imzanın nasıl atıldığında: burada özel anahtar hiç görünmez,
+ * imzalanacak veri bir `Signer`a verilir. Bu sayede aynı kod yolu PFX, HSM,
+ * akıllı kart ve "anahtar tarayıcıdan çıkmaz" senaryolarını destekler.
+ *
+ * @param {Buffer} tbsHash PDF ByteRange özeti
+ * @param {Object} signer  Signer arayüzü
+ * @param {string} leafCertPem
+ * @param {string[]} chainCertPems
+ * @param {Object|null} policy EPES politikası (null ise BES)
+ */
+async function buildCAdES_BES_withSigner(tbsHash, signer, leafCertPem, chainCertPems = [], policy = null) {
+  const leafDer = pemToDer(leafCertPem);
+  const { spkiAlgOid, recommendedHash } = parseCertBasics(leafDer);
+
+  let keyType, hashName = recommendedHash;
+  if (spkiAlgOid === OIDS.idEcPublicKey) keyType = 'ecdsa';
+  else if (spkiAlgOid === OIDS.rsaEncryption) { keyType = 'rsa'; hashName = 'sha256'; }
+  else throw new Error('Desteklenmeyen SPKI algoritması: ' + spkiAlgOid);
+
+  const need = (hashName === 'sha256' ? 32 : hashName === 'sha384' ? 48 : 64);
+  if (tbsHash.length !== need) {
+    throw new Error(`tbsHash ${hashName} olmalı (${need} bayt), gelen: ${tbsHash.length}`);
+  }
+
+  const signedAttrs = buildSignedAttrs(tbsHash, leafDer, hashName, policy);
+  const toSign = signedAttrs.toSign ?? signedAttrs;
+
+  const signature = await signer.sign(toSign, { hash: hashName, keyType });
+  if (!Buffer.isBuffer(signature) || signature.length === 0) {
+    throw new Error('Signer boş imza döndürdü.');
+  }
+
+  const signerInfo = buildSignerInfo_issuerSerial(leafDer, signature, signedAttrs.forCms, keyType, hashName);
+  const chainDer = chainCertPems.map((p) => pemToDer(p));
+  const cmsBES = buildSignedData(hashName, [leafDer, ...chainDer], signerInfo, keyType);
+
+  return { cmsBES, signerInfo, signatureValue: signature, hashName, keyType, leafDer, chainDer, signedAttrs };
+}
+
+/**
+ * İKİ FAZLI İMZALAMA — 1. faz.
+ * İmzalanacak veriyi (signedAttrs DER'i) üretir ama İMZALAMAZ.
+ * Sunucu bunu istemciye gönderir; istemci kendi anahtarıyla imzalar.
+ */
+function prepareCAdES(tbsHash, leafCertPem, chainCertPems = [], policy = null) {
+  const leafDer = pemToDer(leafCertPem);
+  const { spkiAlgOid, recommendedHash } = parseCertBasics(leafDer);
+
+  let keyType, hashName = recommendedHash;
+  if (spkiAlgOid === OIDS.idEcPublicKey) keyType = 'ecdsa';
+  else if (spkiAlgOid === OIDS.rsaEncryption) { keyType = 'rsa'; hashName = 'sha256'; }
+  else throw new Error('Desteklenmeyen SPKI algoritması: ' + spkiAlgOid);
+
+  const signedAttrs = buildSignedAttrs(tbsHash, leafDer, hashName, policy);
+  const toSign = signedAttrs.toSign ?? signedAttrs;
+
+  return {
+    dataToSign: toSign,
+    hashName,
+    keyType,
+    leafDer,
+    chainDer: chainCertPems.map((p) => pemToDer(p)),
+    signedAttrs
+  };
+}
+
+/**
+ * İKİ FAZLI İMZALAMA — 2. faz.
+ * İstemciden gelen imza değeriyle CMS'i tamamlar.
+ */
+function completeCAdES(prepared, signatureValue) {
+  const sig = Buffer.isBuffer(signatureValue) ? signatureValue : Buffer.from(signatureValue);
+  if (!sig.length) throw new Error('completeCAdES: imza değeri boş.');
+
+  const signerInfo = buildSignerInfo_issuerSerial(
+    prepared.leafDer, sig, prepared.signedAttrs.forCms, prepared.keyType, prepared.hashName
+  );
+  const cmsBES = buildSignedData(
+    prepared.hashName, [prepared.leafDer, ...prepared.chainDer], signerInfo, prepared.keyType
+  );
+  return {
+    cmsBES, signerInfo, signatureValue: sig,
+    hashName: prepared.hashName, keyType: prepared.keyType,
+    leafDer: prepared.leafDer, chainDer: prepared.chainDer, signedAttrs: prepared.signedAttrs
+  };
+}
+
 function addUnsignedAttr_signatureTimeStampToken(signerInfoDer, tsTokenDer) {
   const attr = DER.seq(DER.oid(OIDS.signatureTimeStampToken), DER.set(DER.any(tsTokenDer)));
   const unsignedSet = DER.set(attr);
@@ -226,6 +316,9 @@ function readTLV_local(buf, pos) {
 
 module.exports = {
   buildCAdES_BES_auto,
+  buildCAdES_BES_withSigner,
+  prepareCAdES,
+  completeCAdES,
   addUnsignedAttr_signatureTimeStampToken,
   buildSignedData,
   buildEPESPolicyAttribute

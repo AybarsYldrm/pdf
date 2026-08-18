@@ -1,0 +1,26 @@
+{
+  "name": "@fitfak/pkcs12",
+  "version": "1.0.0",
+  "description": "Tam PKCS#12 (.pfx/.p12) okuyucu ve üretici — RFC 7292. PBES2 + PKCS#12 PBE (3DES/RC2), MacData doğrulama, kimlik/zincir eşleştirme.",
+  "main": "index.js",
+  "author": {
+    "email": "network@fitfak.net",
+    "name": "Aybars Yıldırım",
+    "url": "https://aybars.net.tr"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "index.js",
+    "src/"
+  ],
+  "dependencies": {
+    "@fitfak/ssl": "^2.1.0"
+  },
+  "keywords": ["pkcs12", "pfx", "p12", "rfc7292", "rc2", "pbes2", "certificate"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

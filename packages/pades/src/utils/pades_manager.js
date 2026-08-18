@@ -5,7 +5,8 @@ const { PDFPAdESWriter, ensureAcroFormAndEmptySigField } = require('../utils/pdf
 const { pemToDer, parseCertBasics, parseKeyUsageAndEKU, extractSubjectCN } = require('../cades/x509_extract');
 const { buildTSQ, requestTimestamp, extractTimeStampTokenOrThrow } = require('../timestamp/rfc3161');
 const { OIDS } = require('../cades/oids');
-const { buildCAdES_BES_auto, addUnsignedAttr_signatureTimeStampToken, buildSignedData } = require('../cades/cades_builder');
+const { buildCAdES_BES_auto, buildCAdES_BES_withSigner, addUnsignedAttr_signatureTimeStampToken, buildSignedData } = require('../cades/cades_builder');
+const { resolveSigner } = require('../signer');
 
 // TSA hash adı -> OID
 const HASH_NAME_TO_OID = {
@@ -163,8 +164,15 @@ class PAdESManager {
     documentTimestamp = null,
     visibleSignature = null,
     docMDP = null,
-    policy = null // EPES isteniyorsa: { oid, hashBuffer, uri, hashName?, userNoticeText? }
+    policy = null, // EPES isteniyorsa: { oid, hashBuffer, uri, hashName?, userNoticeText? }
+    signer = null  // Signer arayüzü; verilirse keyPem yerine bu kullanılır
   }) {
+    // Signer verildiyse sertifikaları ondan al (PFX / HSM / uzak imzalayıcı yolu)
+    if (signer) {
+      const certs = await signer.getCertificates();
+      certPem = certs.certPem;
+      if (!chainPems || chainPems.length === 0) chainPems = certs.chainPems || [];
+    }
     this._logDebug('PAdES.sign.start', {
       fieldName,
       addDocumentTimeStamp,
@@ -262,8 +270,9 @@ class PAdESManager {
     this._logDebug('PAdES.byteRangeHash', { hashAlgorithm: recommendedHash, digest: tbsHash.toString('hex') });
 
     // CAdES-BES/EPES üretimi: policy verilmediyse BES kalır (fake/test policy eklenmez).
-    const { signerInfo, signatureValue, hashName, keyType, leafDer: _ld, chainDer } =
-      buildCAdES_BES_auto(tbsHash, keyPem, certPem, chainPems, policy);
+    const { signerInfo, signatureValue, hashName, keyType, leafDer: _ld, chainDer } = signer
+      ? await buildCAdES_BES_withSigner(tbsHash, signer, certPem, chainPems, policy)
+      : buildCAdES_BES_auto(tbsHash, keyPem, certPem, chainPems, policy);
     this._logDebug('PAdES.signatureValue', { length: signatureValue.length });
 
     // İmza Zaman Damgası (RFC3161) — signatureValue üzerinde
@@ -328,8 +337,14 @@ class PAdESManager {
     placeholderHexLen = 120000,
     visibleSignature = null,
     docMDP = null,
-    policy = null // EPES isteniyorsa: { oid, hashBuffer, uri, hashName?, userNoticeText? }
+    policy = null, // EPES isteniyorsa: { oid, hashBuffer, uri, hashName?, userNoticeText? }
+    signer = null
   }) {
+    if (signer) {
+      const certs = await signer.getCertificates();
+      certPem = certs.certPem;
+      if (!chainPems || chainPems.length === 0) chainPems = certs.chainPems || [];
+    }
     this._logDebug('PAdES-B.sign.start', { fieldName });
     pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1');
     const leafDer = pemToDer(certPem);
@@ -370,7 +385,9 @@ class PAdESManager {
 
     const { recommendedHash } = parseCertBasics(leafDer);
     const tbsHash = writer.computeByteRangeHash(recommendedHash);
-    const { cmsBES } = buildCAdES_BES_auto(tbsHash, keyPem, certPem, chainPems, policy);
+    const { cmsBES } = signer
+      ? await buildCAdES_BES_withSigner(tbsHash, signer, certPem, chainPems, policy)
+      : buildCAdES_BES_auto(tbsHash, keyPem, certPem, chainPems, policy);
     writer.injectCMS(cmsBES);
     this._logDebug('PAdES-B.injected', { cmsLength: cmsBES.length });
 
@@ -750,8 +767,15 @@ class PAdESManager {
     ltv = null,   // { certsPem?, ocsp?, crl?, prefer?, strict?, autoDiscover? }
     policy = null,
     strict = false,
-    signer = null // Signer arayüzü (keyPem yerine); bkz. src/signer/
+    signer = null,      // Signer arayüzü (keyPem yerine); bkz. src/signer/
+    pfx = null,         // .pfx/.p12 Buffer — verilirse Pkcs12Signer kurulur
+    pfxPassword = '',
+    pfxOptions = null
   }) {
+    // PFX verildiyse imzalayıcıyı ondan kur (kullanıcının en sık istediği yol).
+    if (!signer && pfx) {
+      signer = resolveSigner({ pfx, pfxPassword, pfxOptions: pfxOptions || {} });
+    }
     const docMDP = certify && typeof certify === 'object' ? { level: certify.level } : null;
     const normalizedMode = String(mode || 'T').toUpperCase();
     const reasons = [];

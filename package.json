@@ -17,9 +17,10 @@
     "apps/*"
   ],
   "scripts": {
-    "test": "node --test test/unit/",
-    "test:e2e": "node --test test/e2e/",
-    "test:all": "node --test test/",
+    "test": "node --test 'test/unit/**/*.test.js'",
+    "test:e2e": "node --test 'test/e2e/**/*.test.js'",
+    "test:all": "node --test 'test/**/*.test.js'",
+    "fixtures": "bash test/fixtures/pkcs12/generate.sh",
     "start": "node apps/server/server.js",
     "example": "node examples/01-multi-sign.js"
   }
