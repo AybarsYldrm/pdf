@@ -1,0 +1,88 @@
+/* ==========================================================================
+   @fitfak/paper — Tasarım Belirteçleri (design tokens)
+
+   Temalar YALNIZCA bu değişkenleri ezer. Bileşen dosyaları hiçbir yerde ham
+   renk veya ölçü kullanmaz; hepsi buradan gelir. Bu, "tek yerden tema
+   değiştirme" özelliğini garanti eder.
+   ========================================================================== */
+
+:root {
+  /* ── Sayfa ─────────────────────────────────────────────────────────── */
+  --paper-width: 210mm;
+  --paper-height: 297mm;
+  --paper-margin-x: 18mm;
+  --paper-margin-y: 20mm;
+
+  /* ── Tipografi ─────────────────────────────────────────────────────── */
+  --font-sans: 'Ubuntu', 'Inter', system-ui, sans-serif;
+  --font-serif: 'Source Serif', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+
+  /* 1.25 majör üçlü ölçek */
+  --fs-xs: 7.5pt;
+  --fs-sm: 8.5pt;
+  --fs-base: 10pt;
+  --fs-md: 12pt;
+  --fs-lg: 15pt;
+  --fs-xl: 19pt;
+  --fs-2xl: 24pt;
+  --fs-3xl: 30pt;
+
+  --lh-tight: 1.2;
+  --lh-base: 1.45;
+  --lh-loose: 1.7;
+
+  --tracking-tight: -0.2pt;
+  --tracking-normal: 0;
+  --tracking-wide: 0.6pt;
+  --tracking-wider: 1.4pt;
+
+  /* ── Boşluk (4pt ızgara) ───────────────────────────────────────────── */
+  --sp-0: 0;
+  --sp-1: 4pt;
+  --sp-2: 8pt;
+  --sp-3: 12pt;
+  --sp-4: 16pt;
+  --sp-5: 20pt;
+  --sp-6: 24pt;
+  --sp-8: 32pt;
+  --sp-10: 40pt;
+  --sp-12: 48pt;
+  --sp-16: 64pt;
+
+  /* ── Renk rolleri ──────────────────────────────────────────────────── */
+  --c-ink: #14202b;
+  --c-ink-soft: #47535f;
+  --c-ink-faint: #8b959e;
+
+  --c-accent: #142d5f;
+  --c-accent-soft: #e8edf6;
+  --c-accent-ink: #ffffff;
+
+  --c-rule: #c8ced6;
+  --c-rule-soft: #e6e9ee;
+  --c-rule-strong: #8b959e;
+
+  --c-paper: #ffffff;
+  --c-paper-alt: #f7f8fa;
+
+  --c-ok: #14603a;
+  --c-warn: #8a5a00;
+  --c-danger: #9b1c1c;
+  --c-info: #14507a;
+
+  /* ── Cetveller ─────────────────────────────────────────────────────── */
+  --rule-hair: 0.5pt;
+  --rule-thin: 1pt;
+  --rule-medium: 1.5pt;
+  --rule-bold: 2.5pt;
+  --rule-frame: 4pt;
+
+  /* ── İmza yuvası ───────────────────────────────────────────────────── */
+  --sig-width: 55mm;
+  --sig-height: 22mm;
+  --sig-gap: 10mm;
+}

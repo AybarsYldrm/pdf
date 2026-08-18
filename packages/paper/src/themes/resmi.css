@@ -1,0 +1,19 @@
+/* Tema: resmî — siyah-beyaz, resmî yazışma düzeni, süsleme yok. */
+.paper--resmi {
+  --c-ink: #000000;
+  --c-ink-soft: #333333;
+  --c-ink-faint: #666666;
+  --c-accent: #000000;
+  --c-accent-soft: #f0f0f0;
+  --c-accent-ink: #ffffff;
+  --c-rule: #000000;
+  --c-rule-soft: #999999;
+  --c-rule-strong: #000000;
+  --rule-hair: 0.75pt;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 11pt;
+  --lh-base: 1.5;
+}
+.paper--resmi h1 { text-align: center; text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.paper--resmi .paper-table th { background: #ffffff; color: #000000; border-bottom: var(--rule-thin) solid #000000; }

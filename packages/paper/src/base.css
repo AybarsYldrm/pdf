@@ -1,0 +1,139 @@
+/* ==========================================================================
+   @fitfak/paper — Sıfırlama, sayfa ustaları ve tipografi
+   ========================================================================== */
+
+/* ── Sayfa ────────────────────────────────────────────────────────────── */
+
+@page {
+  size: A4;
+  margin: 20mm 18mm;
+}
+
+/* ── Sıfırlama ────────────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+
+/* ── Kök kap ──────────────────────────────────────────────────────────── */
+
+.paper {
+  display: block;
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+
+/* Tarayıcı önizlemesinde kâğıt görünümü.
+   PDF motoru @media screen bloklarını uygulamaz — bu yüzden çıktı etkilenmez. */
+@media screen {
+  body {
+    background: #6b7280;
+    padding: 24px 0;
+  }
+  .paper {
+    width: var(--paper-width);
+    min-height: var(--paper-height);
+    margin: 0 auto 24px;
+    padding: var(--paper-margin-y) var(--paper-margin-x);
+    background: var(--c-paper);
+    box-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* ── Tipografi ────────────────────────────────────────────────────────── */
+
+.paper h1, .paper h2, .paper h3, .paper h4, .paper h5, .paper h6 {
+  font-family: var(--font-heading);
+  color: var(--c-accent);
+  line-height: var(--lh-tight);
+  break-after: avoid;
+}
+
+.paper h1 { font-size: var(--fs-2xl); margin: 0 0 var(--sp-4); letter-spacing: var(--tracking-tight); }
+.paper h2 { font-size: var(--fs-xl);  margin: var(--sp-6) 0 var(--sp-3); }
+.paper h3 { font-size: var(--fs-lg);  margin: var(--sp-5) 0 var(--sp-2); }
+.paper h4 { font-size: var(--fs-md);  margin: var(--sp-4) 0 var(--sp-2); }
+.paper h5 { font-size: var(--fs-base); margin: var(--sp-3) 0 var(--sp-1); }
+.paper h6 { font-size: var(--fs-sm);  margin: var(--sp-3) 0 var(--sp-1); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+
+.paper p {
+  margin: 0 0 var(--sp-3);
+  orphans: 2;
+  widows: 2;
+}
+
+.paper strong, .paper b { font-weight: bold; }
+.paper em, .paper i { font-style: italic; }
+.paper small { font-size: var(--fs-sm); color: var(--c-ink-soft); }
+.paper code, .paper kbd { font-family: var(--font-mono); font-size: 0.9em; }
+
+.paper a { color: var(--c-accent); text-decoration: underline; }
+
+.paper ul, .paper ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-6); }
+.paper li { margin-bottom: var(--sp-1); }
+
+.paper blockquote {
+  margin: var(--sp-4) 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-left: var(--rule-bold) solid var(--c-accent-soft);
+  color: var(--c-ink-soft);
+  font-style: italic;
+}
+
+.paper hr {
+  margin: var(--sp-5) 0;
+  border-top: var(--rule-hair) solid var(--c-rule);
+}
+
+/* ── Yardımcı sınıflar ────────────────────────────────────────────────── */
+
+.paper-lead     { font-size: var(--fs-md); color: var(--c-ink-soft); line-height: var(--lh-loose); }
+.paper-muted    { color: var(--c-ink-soft); }
+.paper-faint    { color: var(--c-ink-faint); }
+.paper-tiny     { font-size: var(--fs-xs); }
+.paper-caps     { text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.paper-mono     { font-family: var(--font-mono); }
+.paper-center   { text-align: center; }
+.paper-right    { text-align: right; }
+.paper-justify  { text-align: justify; }
+.paper-nowrap   { white-space: nowrap; }
+
+.paper-mt-0 { margin-top: 0; }    .paper-mb-0 { margin-bottom: 0; }
+.paper-mt-2 { margin-top: var(--sp-2); }  .paper-mb-2 { margin-bottom: var(--sp-2); }
+.paper-mt-4 { margin-top: var(--sp-4); }  .paper-mb-4 { margin-bottom: var(--sp-4); }
+.paper-mt-6 { margin-top: var(--sp-6); }  .paper-mb-6 { margin-bottom: var(--sp-6); }
+.paper-mt-8 { margin-top: var(--sp-8); }  .paper-mb-8 { margin-bottom: var(--sp-8); }
+
+.paper-break-before { break-before: page; }
+.paper-break-after  { break-after: page; }
+.paper-keep         { break-inside: avoid; }
+
+/* ── Izgara ───────────────────────────────────────────────────────────── */
+
+.paper-row {
+  display: flex;
+  gap: var(--sp-4);
+}
+.paper-row--tight { gap: var(--sp-2); }
+.paper-row--wide  { gap: var(--sp-8); }
+.paper-row--between { justify-content: space-between; }
+.paper-row--center  { justify-content: center; }
+.paper-row--end     { justify-content: flex-end; }
+.paper-row--top     { align-items: flex-start; }
+
+.paper-col       { flex-grow: 1; }
+.paper-col--1of2 { width: 48%; }
+.paper-col--1of3 { width: 31%; }
+.paper-col--2of3 { width: 65%; }
+.paper-col--1of4 { width: 23%; }
+.paper-col--auto { flex-grow: 0; }

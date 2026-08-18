@@ -1,0 +1,14 @@
+/* Tema: minimal — tipografi ağırlıklı, dekorasyonsuz. */
+.paper--minimal {
+  --c-ink: #111111;
+  --c-ink-soft: #555555;
+  --c-ink-faint: #999999;
+  --c-accent: #111111;
+  --c-accent-soft: #f5f5f5;
+  --c-rule: #dddddd;
+  --c-rule-soft: #eeeeee;
+  --c-rule-strong: #111111;
+  --rule-medium: 1pt;
+}
+.paper--minimal .paper-letterhead { border-bottom-width: var(--rule-hair); }
+.paper--minimal .paper-table th { background: #ffffff; color: var(--c-ink); border-bottom: var(--rule-thin) solid var(--c-ink); }

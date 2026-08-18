@@ -1,0 +1,16 @@
+/* Tema: akademik — serif, geniş kenar boşlukları, dipnot dostu. */
+.paper--akademik {
+  --c-ink: #1a1a1a;
+  --c-ink-soft: #4a4a4a;
+  --c-accent: #5a2d0c;
+  --c-accent-soft: #f5ede6;
+  --c-rule: #d4c8bc;
+  --c-rule-soft: #ece5dd;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 11pt;
+  --lh-base: 1.6;
+  --paper-margin-x: 25mm;
+  --paper-margin-y: 25mm;
+}
+.paper--akademik p { text-align: justify; }

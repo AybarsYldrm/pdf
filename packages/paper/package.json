@@ -1,0 +1,13 @@
+{
+  "name": "@fitfak/paper",
+  "version": "1.0.0",
+  "description": "Baskıya öncelikli CSS tasarım sistemi — hem @fitfak/pdf-html hem tarayıcı için tek kaynak.",
+  "main": "index.js",
+  "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "files": ["index.js", "src/", "dist/"],
+  "scripts": { "build": "node index.js" },
+  "keywords": ["css", "print", "pdf", "design-system", "paged-media"],
+  "publishConfig": { "access": "public" }
+}

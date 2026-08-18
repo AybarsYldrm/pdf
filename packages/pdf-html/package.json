@@ -1,0 +1,13 @@
+{
+  "name": "@fitfak/pdf-html",
+  "version": "1.0.0",
+  "description": "HTML + CSS → PDF derleyicisi; layout manifest ile imza yuvası koordinatları üretir.",
+  "main": "index.js",
+  "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "files": ["index.js", "src/"],
+  "dependencies": { "@fitfak/pdf": "^1.0.0" },
+  "keywords": ["pdf", "html", "css", "print", "paged-media"],
+  "publishConfig": { "access": "public" }
+}

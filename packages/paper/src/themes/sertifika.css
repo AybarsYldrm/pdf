@@ -1,0 +1,17 @@
+/* Tema: sertifika — yatay, çerçeveli, mühür alanlı. */
+@page { size: A4 landscape; margin: 12mm; }
+.paper--sertifika {
+  --c-ink: #14202b;
+  --c-accent: #8a6d1f;
+  --c-accent-soft: #faf5e6;
+  --c-rule: #c9a227;
+  --c-rule-strong: #8a6d1f;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 12pt;
+  padding: 10mm;
+  border: var(--rule-frame) solid var(--c-rule);
+}
+.paper--sertifika .paper-inner { border: var(--rule-thin) solid var(--c-rule); padding: 12mm; min-height: 150mm; }
+.paper--sertifika h1 { font-size: var(--fs-3xl); text-align: center; letter-spacing: var(--tracking-wider); text-transform: uppercase; }
+.paper--sertifika .paper-signature-row { justify-content: space-between; margin-top: 24mm; }

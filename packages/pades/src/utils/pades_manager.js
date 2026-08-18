@@ -178,7 +178,9 @@ class PAdESManager {
       addDocumentTimeStamp,
       documentTimestampProvided: !!documentTimestamp
     });
-    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1');
+    const visiblePage = (visibleSignature && typeof visibleSignature.page === 'number')
+      ? visibleSignature.page : 0;
+    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1', visiblePage);
     // KeyUsage kontrolü (auto fallback DocTS)
     const leafDer = pemToDer(certPem);
     const subjectCN = (() => {
@@ -346,7 +348,9 @@ class PAdESManager {
       if (!chainPems || chainPems.length === 0) chainPems = certs.chainPems || [];
     }
     this._logDebug('PAdES-B.sign.start', { fieldName });
-    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1');
+    const visiblePageB = (visibleSignature && typeof visibleSignature.page === 'number')
+      ? visibleSignature.page : 0;
+    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1', visiblePageB);
     const leafDer = pemToDer(certPem);
     const subjectCN = (() => {
       try { return extractSubjectCN(leafDer) || null; } catch (err) { return null; }

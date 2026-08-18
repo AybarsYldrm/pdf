@@ -1,0 +1,588 @@
+/* @fitfak/paper — derlenmiş paket. Kaynak: packages/paper/src/ */
+
+/* ==========================================================================
+   @fitfak/paper — Tasarım Belirteçleri (design tokens)
+
+   Temalar YALNIZCA bu değişkenleri ezer. Bileşen dosyaları hiçbir yerde ham
+   renk veya ölçü kullanmaz; hepsi buradan gelir. Bu, "tek yerden tema
+   değiştirme" özelliğini garanti eder.
+   ========================================================================== */
+
+:root {
+  /* ── Sayfa ─────────────────────────────────────────────────────────── */
+  --paper-width: 210mm;
+  --paper-height: 297mm;
+  --paper-margin-x: 18mm;
+  --paper-margin-y: 20mm;
+
+  /* ── Tipografi ─────────────────────────────────────────────────────── */
+  --font-sans: 'Ubuntu', 'Inter', system-ui, sans-serif;
+  --font-serif: 'Source Serif', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+
+  /* 1.25 majör üçlü ölçek */
+  --fs-xs: 7.5pt;
+  --fs-sm: 8.5pt;
+  --fs-base: 10pt;
+  --fs-md: 12pt;
+  --fs-lg: 15pt;
+  --fs-xl: 19pt;
+  --fs-2xl: 24pt;
+  --fs-3xl: 30pt;
+
+  --lh-tight: 1.2;
+  --lh-base: 1.45;
+  --lh-loose: 1.7;
+
+  --tracking-tight: -0.2pt;
+  --tracking-normal: 0;
+  --tracking-wide: 0.6pt;
+  --tracking-wider: 1.4pt;
+
+  /* ── Boşluk (4pt ızgara) ───────────────────────────────────────────── */
+  --sp-0: 0;
+  --sp-1: 4pt;
+  --sp-2: 8pt;
+  --sp-3: 12pt;
+  --sp-4: 16pt;
+  --sp-5: 20pt;
+  --sp-6: 24pt;
+  --sp-8: 32pt;
+  --sp-10: 40pt;
+  --sp-12: 48pt;
+  --sp-16: 64pt;
+
+  /* ── Renk rolleri ──────────────────────────────────────────────────── */
+  --c-ink: #14202b;
+  --c-ink-soft: #47535f;
+  --c-ink-faint: #8b959e;
+
+  --c-accent: #142d5f;
+  --c-accent-soft: #e8edf6;
+  --c-accent-ink: #ffffff;
+
+  --c-rule: #c8ced6;
+  --c-rule-soft: #e6e9ee;
+  --c-rule-strong: #8b959e;
+
+  --c-paper: #ffffff;
+  --c-paper-alt: #f7f8fa;
+
+  --c-ok: #14603a;
+  --c-warn: #8a5a00;
+  --c-danger: #9b1c1c;
+  --c-info: #14507a;
+
+  /* ── Cetveller ─────────────────────────────────────────────────────── */
+  --rule-hair: 0.5pt;
+  --rule-thin: 1pt;
+  --rule-medium: 1.5pt;
+  --rule-bold: 2.5pt;
+  --rule-frame: 4pt;
+
+  /* ── İmza yuvası ───────────────────────────────────────────────────── */
+  --sig-width: 55mm;
+  --sig-height: 22mm;
+  --sig-gap: 10mm;
+}
+
+/* ==========================================================================
+   @fitfak/paper — Sıfırlama, sayfa ustaları ve tipografi
+   ========================================================================== */
+
+/* ── Sayfa ────────────────────────────────────────────────────────────── */
+
+@page {
+  size: A4;
+  margin: 20mm 18mm;
+}
+
+/* ── Sıfırlama ────────────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+
+/* ── Kök kap ──────────────────────────────────────────────────────────── */
+
+.paper {
+  display: block;
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+
+/* Tarayıcı önizlemesinde kâğıt görünümü.
+   PDF motoru @media screen bloklarını uygulamaz — bu yüzden çıktı etkilenmez. */
+@media screen {
+  body {
+    background: #6b7280;
+    padding: 24px 0;
+  }
+  .paper {
+    width: var(--paper-width);
+    min-height: var(--paper-height);
+    margin: 0 auto 24px;
+    padding: var(--paper-margin-y) var(--paper-margin-x);
+    background: var(--c-paper);
+    box-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* ── Tipografi ────────────────────────────────────────────────────────── */
+
+.paper h1, .paper h2, .paper h3, .paper h4, .paper h5, .paper h6 {
+  font-family: var(--font-heading);
+  color: var(--c-accent);
+  line-height: var(--lh-tight);
+  break-after: avoid;
+}
+
+.paper h1 { font-size: var(--fs-2xl); margin: 0 0 var(--sp-4); letter-spacing: var(--tracking-tight); }
+.paper h2 { font-size: var(--fs-xl);  margin: var(--sp-6) 0 var(--sp-3); }
+.paper h3 { font-size: var(--fs-lg);  margin: var(--sp-5) 0 var(--sp-2); }
+.paper h4 { font-size: var(--fs-md);  margin: var(--sp-4) 0 var(--sp-2); }
+.paper h5 { font-size: var(--fs-base); margin: var(--sp-3) 0 var(--sp-1); }
+.paper h6 { font-size: var(--fs-sm);  margin: var(--sp-3) 0 var(--sp-1); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+
+.paper p {
+  margin: 0 0 var(--sp-3);
+  orphans: 2;
+  widows: 2;
+}
+
+.paper strong, .paper b { font-weight: bold; }
+.paper em, .paper i { font-style: italic; }
+.paper small { font-size: var(--fs-sm); color: var(--c-ink-soft); }
+.paper code, .paper kbd { font-family: var(--font-mono); font-size: 0.9em; }
+
+.paper a { color: var(--c-accent); text-decoration: underline; }
+
+.paper ul, .paper ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-6); }
+.paper li { margin-bottom: var(--sp-1); }
+
+.paper blockquote {
+  margin: var(--sp-4) 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-left: var(--rule-bold) solid var(--c-accent-soft);
+  color: var(--c-ink-soft);
+  font-style: italic;
+}
+
+.paper hr {
+  margin: var(--sp-5) 0;
+  border-top: var(--rule-hair) solid var(--c-rule);
+}
+
+/* ── Yardımcı sınıflar ────────────────────────────────────────────────── */
+
+.paper-lead     { font-size: var(--fs-md); color: var(--c-ink-soft); line-height: var(--lh-loose); }
+.paper-muted    { color: var(--c-ink-soft); }
+.paper-faint    { color: var(--c-ink-faint); }
+.paper-tiny     { font-size: var(--fs-xs); }
+.paper-caps     { text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.paper-mono     { font-family: var(--font-mono); }
+.paper-center   { text-align: center; }
+.paper-right    { text-align: right; }
+.paper-justify  { text-align: justify; }
+.paper-nowrap   { white-space: nowrap; }
+
+.paper-mt-0 { margin-top: 0; }    .paper-mb-0 { margin-bottom: 0; }
+.paper-mt-2 { margin-top: var(--sp-2); }  .paper-mb-2 { margin-bottom: var(--sp-2); }
+.paper-mt-4 { margin-top: var(--sp-4); }  .paper-mb-4 { margin-bottom: var(--sp-4); }
+.paper-mt-6 { margin-top: var(--sp-6); }  .paper-mb-6 { margin-bottom: var(--sp-6); }
+.paper-mt-8 { margin-top: var(--sp-8); }  .paper-mb-8 { margin-bottom: var(--sp-8); }
+
+.paper-break-before { break-before: page; }
+.paper-break-after  { break-after: page; }
+.paper-keep         { break-inside: avoid; }
+
+/* ── Izgara ───────────────────────────────────────────────────────────── */
+
+.paper-row {
+  display: flex;
+  gap: var(--sp-4);
+}
+.paper-row--tight { gap: var(--sp-2); }
+.paper-row--wide  { gap: var(--sp-8); }
+.paper-row--between { justify-content: space-between; }
+.paper-row--center  { justify-content: center; }
+.paper-row--end     { justify-content: flex-end; }
+.paper-row--top     { align-items: flex-start; }
+
+.paper-col       { flex-grow: 1; }
+.paper-col--1of2 { width: 48%; }
+.paper-col--1of3 { width: 31%; }
+.paper-col--2of3 { width: 65%; }
+.paper-col--1of4 { width: 23%; }
+.paper-col--auto { flex-grow: 0; }
+
+
+/* ==========================================================================
+   @fitfak/paper — Bileşenler
+   ========================================================================== */
+
+/* ── Antet (letterhead) ───────────────────────────────────────────────── */
+
+.paper-letterhead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding-bottom: var(--sp-3);
+  border-bottom: var(--rule-medium) solid var(--c-accent);
+  margin-bottom: var(--sp-6);
+}
+
+.paper-letterhead__logo { width: 46pt; height: 46pt; }
+
+.paper-letterhead__org { flex-grow: 1; }
+
+.paper-letterhead__name {
+  display: block;
+  font-size: var(--fs-lg);
+  font-weight: bold;
+  color: var(--c-accent);
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-letterhead__unit {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--c-ink-soft);
+}
+
+.paper-letterhead__contact {
+  font-size: var(--fs-xs);
+  color: var(--c-ink-faint);
+  text-align: right;
+  width: 140pt;
+}
+
+/* ── Başlık bloğu ─────────────────────────────────────────────────────── */
+
+.paper-titleblock {
+  margin-bottom: var(--sp-6);
+}
+
+.paper-titleblock h1 {
+  margin-bottom: var(--sp-3);
+}
+
+.paper-titleblock--center {
+  text-align: center;
+}
+
+.paper-titleblock--boxed {
+  padding: var(--sp-4);
+  background: var(--c-accent-soft);
+  border-left: var(--rule-bold) solid var(--c-accent);
+}
+
+/* ── Künye tablosu (etiket/değer) ─────────────────────────────────────── */
+
+.paper-metatable {
+  display: table;
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.paper-metatable tr { display: table-row; }
+
+.paper-metatable td,
+.paper-metatable th {
+  display: table-cell;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: var(--rule-hair) solid var(--c-rule-soft);
+  text-align: left;
+}
+
+.paper-metatable th {
+  width: 90pt;
+  color: var(--c-ink-soft);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+/* ── Veri tablosu ─────────────────────────────────────────────────────── */
+
+.paper-table {
+  display: table;
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.paper-table th {
+  display: table-cell;
+  padding: var(--sp-2);
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: bold;
+  text-align: left;
+  border-bottom: var(--rule-thin) solid var(--c-accent);
+}
+
+.paper-table td {
+  display: table-cell;
+  padding: var(--sp-2);
+  border-bottom: var(--rule-hair) solid var(--c-rule-soft);
+}
+
+.paper-table--zebra tbody tr:nth-child(even) td {
+  background: var(--c-paper-alt);
+}
+
+.paper-table--bordered td,
+.paper-table--bordered th {
+  border: var(--rule-hair) solid var(--c-rule);
+}
+
+.paper-table--compact td,
+.paper-table--compact th {
+  padding: var(--sp-1);
+  font-size: var(--fs-xs);
+}
+
+.paper-table .num { text-align: right; font-family: var(--font-mono); }
+
+/* ── Uyarı kutuları ───────────────────────────────────────────────────── */
+
+.paper-callout {
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0 0 var(--sp-4);
+  border-left: var(--rule-bold) solid var(--c-rule-strong);
+  background: var(--c-paper-alt);
+  font-size: var(--fs-sm);
+  break-inside: avoid;
+}
+
+.paper-callout__title {
+  display: block;
+  font-weight: bold;
+  margin-bottom: var(--sp-1);
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-callout--info    { border-left-color: var(--c-info);   }
+.paper-callout--ok      { border-left-color: var(--c-ok);     }
+.paper-callout--warn    { border-left-color: var(--c-warn);   }
+.paper-callout--danger  { border-left-color: var(--c-danger); }
+
+.paper-callout--info .paper-callout__title   { color: var(--c-info);   }
+.paper-callout--ok .paper-callout__title     { color: var(--c-ok);     }
+.paper-callout--warn .paper-callout__title   { color: var(--c-warn);   }
+.paper-callout--danger .paper-callout__title { color: var(--c-danger); }
+
+/* ── İmza yuvaları ────────────────────────────────────────────────────────
+   ÖNEMLİ: `data-signer` özniteliği taşıyan her eleman, PDF motoru tarafından
+   LAYOUT MANIFEST'e yazılır. İmza motoru koordinatları oradan okur; kodda
+   sabit koordinat yazmaya gerek kalmaz.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.paper-signature-row {
+  display: flex;
+  gap: var(--sig-gap);
+  margin-top: var(--sp-10);
+  break-inside: avoid;
+}
+
+.paper-signature-row--end    { justify-content: flex-end; }
+.paper-signature-row--between { justify-content: space-between; }
+.paper-signature-row--center { justify-content: center; }
+
+.paper-sig-slot {
+  width: var(--sig-width);
+  min-height: var(--sig-height);
+  padding-top: var(--sp-2);
+  border-top: var(--rule-thin) solid var(--c-rule-strong);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-soft);
+  break-inside: avoid;
+}
+
+.paper-sig-slot__role {
+  display: block;
+  font-weight: bold;
+  color: var(--c-ink);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-sig-slot__name {
+  display: block;
+  margin-top: var(--sp-1);
+}
+
+.paper-sig-slot__title {
+  display: block;
+  color: var(--c-ink-faint);
+}
+
+.paper-sig-slot--wide   { width: 75mm; }
+.paper-sig-slot--narrow { width: 42mm; }
+.paper-sig-slot--tall   { min-height: 32mm; }
+
+/* ── Damga / QR yuvası ────────────────────────────────────────────────── */
+
+.paper-stamp-slot {
+  width: 26mm;
+  height: 26mm;
+}
+
+.paper-stamp-slot--wide { width: 55mm; height: 14mm; }
+
+/* ── Alt bilgi ────────────────────────────────────────────────────────── */
+
+.paper-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-2);
+  border-top: var(--rule-hair) solid var(--c-rule);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-faint);
+}
+
+.paper-footer__doc  { flex-grow: 1; }
+.paper-footer__page { width: 90pt; text-align: right; }
+
+/* ── Filigran ─────────────────────────────────────────────────────────── */
+
+.paper-watermark {
+  position: absolute;
+  top: 40%;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 64pt;
+  font-weight: bold;
+  color: var(--c-rule-soft);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+
+/* ── Doğrulama şeridi ─────────────────────────────────────────────────── */
+
+.paper-verify {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  margin-top: var(--sp-6);
+  padding: var(--sp-3);
+  background: var(--c-paper-alt);
+  border-left: var(--rule-medium) solid var(--c-accent);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-soft);
+  break-inside: avoid;
+}
+
+.paper-verify__qr { width: 22mm; height: 22mm; }
+.paper-verify__text { flex-grow: 1; }
+
+
+/* Tema: kurumsal — lacivert, ince cetveller, kurumsal ciddiyet.
+   (Projenin mevcut index.js estetiğinin sistemleştirilmiş hâli.) */
+.paper--kurumsal {
+  --c-ink: #14202b;
+  --c-ink-soft: #47535f;
+  --c-ink-faint: #8b959e;
+  --c-accent: #142d5f;
+  --c-accent-soft: #e8edf6;
+  --c-rule: #c8ced6;
+  --c-rule-soft: #e6e9ee;
+  --c-rule-strong: #7a8794;
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+}
+
+
+/* Tema: resmî — siyah-beyaz, resmî yazışma düzeni, süsleme yok. */
+.paper--resmi {
+  --c-ink: #000000;
+  --c-ink-soft: #333333;
+  --c-ink-faint: #666666;
+  --c-accent: #000000;
+  --c-accent-soft: #f0f0f0;
+  --c-accent-ink: #ffffff;
+  --c-rule: #000000;
+  --c-rule-soft: #999999;
+  --c-rule-strong: #000000;
+  --rule-hair: 0.75pt;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 11pt;
+  --lh-base: 1.5;
+}
+.paper--resmi h1 { text-align: center; text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.paper--resmi .paper-table th { background: #ffffff; color: #000000; border-bottom: var(--rule-thin) solid #000000; }
+
+
+/* Tema: akademik — serif, geniş kenar boşlukları, dipnot dostu. */
+.paper--akademik {
+  --c-ink: #1a1a1a;
+  --c-ink-soft: #4a4a4a;
+  --c-accent: #5a2d0c;
+  --c-accent-soft: #f5ede6;
+  --c-rule: #d4c8bc;
+  --c-rule-soft: #ece5dd;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 11pt;
+  --lh-base: 1.6;
+  --paper-margin-x: 25mm;
+  --paper-margin-y: 25mm;
+}
+.paper--akademik p { text-align: justify; }
+
+
+/* Tema: minimal — tipografi ağırlıklı, dekorasyonsuz. */
+.paper--minimal {
+  --c-ink: #111111;
+  --c-ink-soft: #555555;
+  --c-ink-faint: #999999;
+  --c-accent: #111111;
+  --c-accent-soft: #f5f5f5;
+  --c-rule: #dddddd;
+  --c-rule-soft: #eeeeee;
+  --c-rule-strong: #111111;
+  --rule-medium: 1pt;
+}
+.paper--minimal .paper-letterhead { border-bottom-width: var(--rule-hair); }
+.paper--minimal .paper-table th { background: #ffffff; color: var(--c-ink); border-bottom: var(--rule-thin) solid var(--c-ink); }
+
+
+/* Tema: sertifika — yatay, çerçeveli, mühür alanlı. */
+@page { size: A4 landscape; margin: 12mm; }
+.paper--sertifika {
+  --c-ink: #14202b;
+  --c-accent: #8a6d1f;
+  --c-accent-soft: #faf5e6;
+  --c-rule: #c9a227;
+  --c-rule-strong: #8a6d1f;
+  --font-body: var(--font-serif);
+  --font-heading: var(--font-serif);
+  --fs-base: 12pt;
+  padding: 10mm;
+  border: var(--rule-frame) solid var(--c-rule);
+}
+.paper--sertifika .paper-inner { border: var(--rule-thin) solid var(--c-rule); padding: 12mm; min-height: 150mm; }
+.paper--sertifika h1 { font-size: var(--fs-3xl); text-align: center; letter-spacing: var(--tracking-wider); text-transform: uppercase; }
+.paper--sertifika .paper-signature-row { justify-content: space-between; margin-top: 24mm; }

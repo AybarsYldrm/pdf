@@ -229,6 +229,29 @@ function _findFirstPageFrom(pdf, objNum, depth){
   return null;
 }
 
+/**
+ * Belgedeki TÜM sayfa nesne numaralarını sırayla döndürür.
+ *
+ * Görünür imza bugüne kadar yalnız ilk sayfaya konabiliyordu; çok sayfalı
+ * belgelerde imza yuvası son sayfada olsa bile damga birinci sayfaya basılıyordu.
+ */
+function listPageObjNums(pdf, objNum, depth, out){
+  if (out === undefined) {
+    const meta = readLastTrailer(pdf);
+    const root = readObject(pdf, meta.rootObjNum);
+    if (!root || !root.dictStr) return [];
+    const pagesRef = /\/Pages\s+(\d+)\s+0\s+R/.exec(root.dictStr);
+    if (!pagesRef) return [];
+    return listPageObjNums(pdf, parseInt(pagesRef[1], 10), 0, []);
+  }
+  if (depth > 32) return out;
+  const obj = readObject(pdf, objNum);
+  if (!obj || !obj.dictStr) return out;
+  if (_dictHasType(obj.dictStr, 'Page')) { out.push(objNum); return out; }
+  for (const kid of _readKidsArray(obj.dictStr)) listPageObjNums(pdf, kid, depth + 1, out);
+  return out;
+}
+
 function findFirstPageObjNumSafe(pdf){
   const meta = readLastTrailer(pdf);
   const catalog = readObject(pdf, meta.rootObjNum);
@@ -1065,7 +1088,7 @@ function findAllSignatures(pdfBuffer){
   return out;
 }
 
-function ensureAcroFormAndEmptySigField(pdfBuffer, fieldName){
+function ensureAcroFormAndEmptySigField(pdfBuffer, fieldName, pageIndex){
   const requestedName = (typeof fieldName === 'string' && fieldName.length > 0) ? fieldName : null;
   const fieldLabel = requestedName || 'Sig1';
   const meta = readLastTrailer(pdfBuffer);
@@ -1106,11 +1129,18 @@ function ensureAcroFormAndEmptySigField(pdfBuffer, fieldName){
   } else {
     fieldObjNum = nextObj++; // KRİTİK: Field ve Widget için TEK BİR obje numarası ayırıyoruz
     let pageObjNum = null;
-    try {
-      pageObjNum = findFirstPageObjNumSafe(pdfBuffer);
-    } catch (err) {
-      pageObjNum = _findFirstPageByScan(pdfBuffer);
-      if (!pageObjNum) throw err;
+    // İmza yuvası hangi sayfadaysa widget O sayfaya bağlanmalı.
+    if (typeof pageIndex === 'number' && pageIndex > 0) {
+      const all = listPageObjNums(pdfBuffer);
+      if (all.length > pageIndex) pageObjNum = all[pageIndex];
+    }
+    if (pageObjNum == null) {
+      try {
+        pageObjNum = findFirstPageObjNumSafe(pdfBuffer);
+      } catch (err) {
+        pageObjNum = _findFirstPageByScan(pdfBuffer);
+        if (!pageObjNum) throw err;
+      }
     }
     const pageObj = readObject(pdfBuffer, pageObjNum);
     if (!pageObj || !/\/Type\s*\/Page\b/.test(pageObj.dictStr)) throw new Error('Resolved page is not /Type /Page');
@@ -1851,5 +1881,6 @@ module.exports = {
   readLastTrailer,
   readObject,
   findAllSignatures,
-  vriKeysFromContentsHex
+  vriKeysFromContentsHex,
+  listPageObjNums
 };

@@ -62,6 +62,8 @@ function buildVisibleSignature(o = {}) {
 
   return {
     imageBuffer,
+    // Görünür imzanın hangi sayfaya basılacağı (0 tabanlı)
+    page: typeof o.page === 'number' ? o.page : 0,
     defaultPosition: rect,
     coordinateMap: o.coordinateMap || {},
     rendered,
@@ -88,6 +90,7 @@ function fromManifestSlot(slot, opts = {}) {
   }
   return buildVisibleSignature({
     ...opts,
+    page: slot.page || 0,
     rect: {
       x: slot.rect.x,
       y: slot.rect.y,
