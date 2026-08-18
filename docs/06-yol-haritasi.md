@@ -1,5 +1,10 @@
 # 06 — Yol Haritası
 
+> **DURUM (bu dalda):** Faz 0, 1, 2, 3, 4, 6 ve 7 **tamamlandı** ve testleriyle
+> birlikte depoda. Faz 5 (`@fitfak/pdf-doc` — PDF okuma/düzenleme, xref stream +
+> ObjStm) ve Faz 6d (PDF/A, PDF/UA) ile Faz 8 (CLI, cilalama) **açık**.
+> Aşağıdaki plan olduğu gibi bırakıldı; tamamlananlar ✅ ile işaretlendi.
+
 Fazlar sıralıdır: her faz, bir öncekinin çıktısını temel alır. Her fazın sonunda
 **gösterilebilir bir şey** vardır — "altyapı fazı" yoktur.
 
@@ -7,7 +12,7 @@ Efor birimi: **AG = adam-gün** (kaba tahmin, kalibre edilecek).
 
 ---
 
-## Faz 0 — Temizlik ve İskele · ~3 AG
+## ✅ Faz 0 — Temizlik ve İskele · ~3 AG
 
 Kod yazmadan önce zemini düzelt. Bu fazın tamamı mekaniktir, riski düşüktür.
 
@@ -28,7 +33,7 @@ Kod yazmadan önce zemini düzelt. Bu fazın tamamı mekaniktir, riski düşükt
 
 ---
 
-## Faz 1 — PAdES/LTV'yi Eksiksiz Yap · ~10 AG
+## ✅ Faz 1 — PAdES/LTV'yi Eksiksiz Yap · ~10 AG
 
 Kullanıcının **birincil** isteği. En yüksek değer burada.
 
@@ -52,7 +57,7 @@ Kullanıcının **birincil** isteği. En yüksek değer burada.
 
 ---
 
-## Faz 2 — PKCS#12 · ~6 AG
+## ✅ Faz 2 — PKCS#12 · ~6 AG
 
 | # | İş | Kabul kriteri |
 |---|-----|---------------|
@@ -73,7 +78,7 @@ edilir; E2E senaryo 11 yeşil.
 
 ---
 
-## Faz 3 — Doğrulama Motoru ve Offline Test PKI'ı · ~7 AG
+## ✅ Faz 3 — Doğrulama Motoru ve Offline Test PKI'ı · ~7 AG
 
 Faz 1 ve 2'yi **kanıtlayan** faz. Aslında Faz 1 ile paralel yürütülmeli.
 
@@ -94,7 +99,7 @@ Faz 1 ve 2'yi **kanıtlayan** faz. Aslında Faz 1 ile paralel yürütülmeli.
 
 ---
 
-## Faz 4 — Damga: QR + Şablonlar · ~4 AG
+## ✅ Faz 4 — Damga: QR + Şablonlar · ~4 AG
 
 | # | İş | Kabul kriteri |
 |---|-----|---------------|
@@ -109,7 +114,7 @@ Faz 1 ve 2'yi **kanıtlayan** faz. Aslında Faz 1 ile paralel yürütülmeli.
 
 ---
 
-## Faz 5 — PDF Okuma/Düzenleme · ~10 AG
+## ⬜ Faz 5 — PDF Okuma/Düzenleme · ~10 AG
 
 | # | İş | Kabul kriteri |
 |---|-----|---------------|
@@ -128,7 +133,7 @@ Faz 1 ve 2'yi **kanıtlayan** faz. Aslında Faz 1 ile paralel yürütülmeli.
 
 ---
 
-## Faz 6 — HTML/CSS Motoru ve `@fitfak/paper` · ~18 AG
+## ✅ Faz 6 — HTML/CSS Motoru ve `@fitfak/paper` · ~18 AG
 
 En büyük faz. Kendi içinde üçe bölünür.
 
@@ -160,7 +165,7 @@ PDF/A-2b + veraPDF geçişi · PDF/UA etiketli PDF · `@font-face` · SVG alt k�
 
 ---
 
-## Faz 7 — Web Studio · ~14 AG
+## ✅ Faz 7 — Web Studio · ~14 AG
 
 | # | İş | AG |
 |---|-----|---:|
@@ -181,7 +186,7 @@ Sunucu (`apps/server`) 7.1 ile paralel: ~2 AG.
 
 ---
 
-## Faz 8 — Cilalama · ~5 AG
+## ⬜ Faz 8 — Cilalama · ~5 AG
 
 CLI (`fitfak-belge sign|verify|render|extend`) · Performans profili ve iyileştirme ·
 Belgeleme (her paket için README + JSDoc) · Dış doğrulayıcı uyumluluk raporu
