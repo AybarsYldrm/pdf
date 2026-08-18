@@ -1,0 +1,13 @@
+{
+  "name": "@fitfak/verify",
+  "version": "1.0.0",
+  "description": "PDF imza doğrulama motoru — ETSI TS 119 102-1 biçiminde rapor üretir.",
+  "main": "index.js",
+  "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "files": ["index.js", "src/"],
+  "dependencies": { "@fitfak/pades": "^1.0.0", "@fitfak/ssl": "^2.1.0" },
+  "keywords": ["pades", "verify", "etsi", "signature", "ltv"],
+  "publishConfig": { "access": "public" }
+}
