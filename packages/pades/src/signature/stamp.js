@@ -487,8 +487,8 @@ function layoutNameLines(personName,fontData,fontPx,maxTextWidthPx){
   const first=words[0], rest=words.slice(1).join(" ");
   return [first,rest];
 }
-function drawTopHalfSS({ pixels, Wss, HhalfSS, fontData, personName }){
-  const prngByte = makePRNG(makeFastSeed());
+function drawTopHalfSS({ pixels, Wss, HhalfSS, fontData, personName, seed }){
+  const prngByte = makePRNG(seed === undefined ? makeFastSeed() : (seed >>> 0));
   applyGrainTransparentTop(pixels, Wss, HhalfSS, prngByte);
 
   const color=[35,35,35,255];
@@ -626,7 +626,9 @@ function generateStamp({
   finalH = 320,
   leftW = 560,
   rightW = 720,
-  SS = 4
+  SS = 4,
+  seed,           // verilirse doku PRNG tohumu sabitlenir (testlerde tekrarlanabilirlik)
+  barcodeCore     // verilirse barkod icerigi sabitlenir
 }){
   if(leftW + rightW !== finalW) throw new Error("leftW + rightW must equal finalW");
 
@@ -643,7 +645,7 @@ function generateStamp({
   const fontData = parseTTF(fontBuf);
 
   // draw top half (grain + name)
-  drawTopHalfSS({ pixels: pixSS, Wss: HW, HhalfSS: HhalfSS, fontData, personName });
+  drawTopHalfSS({ pixels: pixSS, Wss: HW, HhalfSS: HhalfSS, fontData, personName, seed });
 
   // draw bottom half (dark band + logo + FITFAK)
   drawBottomHalfSS({ pixels: pixSS, Wss: HW, HhalfSS: HhalfSS, startYss: HhalfSS, fontData, pngLogoPath });
@@ -652,7 +654,7 @@ function generateStamp({
   const leftPanelFinalRGBA = downsample(pixSS, HW, HH_totalSS, leftW, finalH, SS);
 
   // right panel barcode generation
-  const core = makeBarcodeCore();
+  const core = barcodeCore || makeBarcodeCore();
   const bits = encodeCode39Data(core);
   const barcodePanelRGBA = renderBarcodePanelFinal({ panelW: rightW, panelH: finalH, barcodeBits: bits });
 
@@ -688,4 +690,28 @@ function generateStamp({
 /* ---------- export + example run ---------- */
 const generateStampPNG = generateStamp;
 
-module.exports = { generateStamp, generateStampPNG };
+module.exports = {
+  generateStamp,
+  generateStampPNG,
+  // @fitfak/stamp bunlari TEK KAYNAK olarak kullanir; Code39 yapisi
+  // kopyalanmaz, dolayisiyla ayrisamaz.
+  CODE39_MAP,
+  encodeCode39Data,
+  makeBarcodeCore,
+  // Dusuk seviye yardimcilar (yeni damga motoru yeniden kullanir)
+  parseTTF,
+  drawTextTTF,
+  measureTextTTF,
+  loadPngRGBA,
+  blitRGBA,
+  downsample,
+  makePRNG,
+  makeFastSeed,
+  applyGrainTransparentTop,
+  crc32,
+  makeChunk,
+  makeIHDR,
+  makeIDAT,
+  makeIEND,
+  normalizeUpperTR
+};
