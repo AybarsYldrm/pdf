@@ -1,0 +1,15 @@
+{
+  "name": "@fitfak/server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Belge Studio API sunucusu — saf node:http.",
+  "main": "server.js",
+  "dependencies": {
+    "@fitfak/pades": "^1.0.0",
+    "@fitfak/pdf-html": "^1.0.0",
+    "@fitfak/paper": "^1.0.0",
+    "@fitfak/pkcs12": "^1.0.0",
+    "@fitfak/stamp": "^1.0.0",
+    "@fitfak/verify": "^1.0.0"
+  }
+}

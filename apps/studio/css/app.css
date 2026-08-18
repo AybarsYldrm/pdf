@@ -1,0 +1,338 @@
+/* ==========================================================================
+   FITFAK Belge Studio — arayüz kabuğu.
+   Belge önizlemesi @fitfak/paper CSS'i ile ayrı bir <iframe> içinde çizilir;
+   bu dosya yalnız uygulama kabuğunu biçimlendirir.
+   ========================================================================== */
+
+:root {
+  --ui-bg: #f4f5f7;
+  --ui-surface: #ffffff;
+  --ui-surface-2: #fafbfc;
+  --ui-border: #dfe3e8;
+  --ui-border-strong: #c3cad3;
+  --ui-ink: #16202b;
+  --ui-ink-soft: #5a6673;
+  --ui-ink-faint: #8b95a1;
+  --ui-accent: #142d5f;
+  --ui-accent-soft: #e8edf6;
+  --ui-accent-ink: #ffffff;
+  --ui-ok: #14603a;
+  --ui-ok-soft: #e6f4ec;
+  --ui-warn: #8a5a00;
+  --ui-warn-soft: #fdf3e0;
+  --ui-danger: #9b1c1c;
+  --ui-danger-soft: #fbeaea;
+  --ui-radius: 6px;
+  --ui-bar-h: 52px;
+  --ui-panel-w: 320px;
+  --ui-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ui-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+[data-theme="dark"] {
+  --ui-bg: #10141a;
+  --ui-surface: #171d26;
+  --ui-surface-2: #1d242f;
+  --ui-border: #2a3341;
+  --ui-border-strong: #3b4657;
+  --ui-ink: #e6ebf2;
+  --ui-ink-soft: #9aa7b6;
+  --ui-ink-faint: #6b7787;
+  --ui-accent: #6f9bff;
+  --ui-accent-soft: #1c2740;
+  --ui-accent-ink: #0d1219;
+  --ui-ok: #5ed39b;
+  --ui-ok-soft: #14261e;
+  --ui-warn: #e0b25e;
+  --ui-warn-soft: #2a2214;
+  --ui-danger: #ef7d7d;
+  --ui-danger-soft: #2c1818;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--ui-bg);
+  color: var(--ui-ink);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* ── Üst çubuk ──────────────────────────────────────────────────────── */
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: var(--ui-bar-h);
+  padding: 0 16px;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.app-bar__brand { display: flex; align-items: center; gap: 10px; }
+
+.app-bar__mark {
+  width: 22px; height: 22px; border-radius: 5px;
+  background: linear-gradient(135deg, var(--ui-accent), #3d6fd6);
+}
+
+.app-bar__name { font-size: 14px; letter-spacing: 0.2px; color: var(--ui-ink-soft); }
+.app-bar__name strong { color: var(--ui-ink); }
+
+.app-bar__actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.tabs { display: flex; gap: 2px; }
+
+.tab {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--ui-radius);
+  background: transparent;
+  color: var(--ui-ink-soft);
+  font: inherit;
+  cursor: pointer;
+}
+.tab:hover { background: var(--ui-surface-2); color: var(--ui-ink); }
+.tab.is-active { background: var(--ui-accent-soft); color: var(--ui-accent); font-weight: 600; }
+.tab:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+  background: var(--ui-ok-soft); color: var(--ui-ok);
+}
+.badge--lock::before { content: "🔒"; font-size: 11px; }
+.badge--warn { background: var(--ui-warn-soft); color: var(--ui-warn); }
+.badge--warn::before { content: "⚠"; }
+
+/* ── Yerleşim ───────────────────────────────────────────────────────── */
+
+.workspace {
+  display: grid;
+  grid-template-columns: var(--ui-panel-w) 1fr var(--ui-panel-w);
+  height: calc(100vh - var(--ui-bar-h));
+}
+
+.panel {
+  background: var(--ui-surface);
+  overflow-y: auto;
+  padding: 16px;
+}
+.panel--left  { border-right: 1px solid var(--ui-border); }
+.panel--right { border-left: 1px solid var(--ui-border); }
+
+.pane { display: flex; flex-direction: column; gap: 12px; height: 100%; }
+.pane.is-hidden { display: none; }
+
+.pane__title {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--ui-ink-faint);
+}
+
+.pane__actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* ── Form ───────────────────────────────────────────────────────────── */
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field--grow { flex: 1; min-height: 180px; }
+.field__label { font-size: 12px; color: var(--ui-ink-soft); }
+
+.input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface-2);
+  color: var(--ui-ink);
+  font: inherit;
+}
+.input:focus { outline: 2px solid var(--ui-accent); outline-offset: -1px; border-color: var(--ui-accent); }
+
+.input--code {
+  flex: 1;
+  min-height: 160px;
+  font-family: var(--ui-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.input--file { padding: 5px; }
+
+.check { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--ui-ink-soft); }
+.check em { font-style: normal; color: var(--ui-warn); }
+
+.levels { display: flex; flex-direction: column; gap: 4px; }
+.level {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: var(--ui-radius);
+  cursor: pointer; font-size: 12px;
+}
+.level:hover { background: var(--ui-surface-2); }
+.level b { color: var(--ui-ink); }
+
+.hint { margin: 0; font-size: 11px; color: var(--ui-ink-faint); }
+
+/* ── Butonlar ───────────────────────────────────────────────────────── */
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface-2);
+  color: var(--ui-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: var(--ui-accent-soft); border-color: var(--ui-accent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+
+.btn--primary {
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent-ink);
+  font-weight: 600;
+}
+.btn--primary:hover:not(:disabled) { filter: brightness(1.12); }
+
+.btn--ghost { border-color: transparent; background: transparent; color: var(--ui-ink-soft); }
+.btn--icon { padding: 2px 9px; font-size: 15px; line-height: 1.3; }
+
+/* ── Tuval ──────────────────────────────────────────────────────────── */
+
+.canvas { display: flex; flex-direction: column; background: var(--ui-bg); min-width: 0; }
+
+.canvas__toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 14px;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 12px;
+}
+.canvas__status { color: var(--ui-ink-soft); }
+.canvas__zoom { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.canvas__scroll { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; }
+
+.preview {
+  width: 210mm;
+  min-height: 297mm;
+  border: 0;
+  background: #fff;
+  box-shadow: 0 2px 20px rgba(0, 0, 0, 0.28);
+  transform-origin: top center;
+}
+
+/* İmza yuvası vurguları (iframe içine enjekte edilir) */
+.canvas__scroll.is-picking .preview { cursor: crosshair; }
+
+/* ── İmza paneli ────────────────────────────────────────────────────── */
+
+.sigpanel { display: flex; flex-direction: column; gap: 12px; }
+
+.empty { color: var(--ui-ink-faint); font-size: 13px; }
+
+.sig {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  overflow: hidden;
+  background: var(--ui-surface-2);
+}
+
+.sig__head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px;
+  font-weight: 600;
+}
+.sig--pass  .sig__head { background: var(--ui-ok-soft);     color: var(--ui-ok); }
+.sig--warn  .sig__head { background: var(--ui-warn-soft);   color: var(--ui-warn); }
+.sig--fail  .sig__head { background: var(--ui-danger-soft); color: var(--ui-danger); }
+
+.sig__level {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.09);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sig__body { padding: 9px 11px; font-size: 12px; color: var(--ui-ink-soft); }
+
+.sig__line { display: flex; gap: 6px; padding: 2px 0; }
+.sig__line::before { content: "├"; color: var(--ui-ink-faint); }
+.sig__line:last-child::before { content: "└"; }
+.sig__line--ok::after   { content: "✓"; color: var(--ui-ok);     margin-left: auto; }
+.sig__line--bad::after  { content: "✗"; color: var(--ui-danger); margin-left: auto; }
+
+.sig__details { margin-top: 8px; }
+.sig__details summary { cursor: pointer; color: var(--ui-accent); font-size: 12px; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; font-size: 11px; }
+.kv dt { color: var(--ui-ink-faint); }
+.kv dd { margin: 0; font-family: var(--ui-mono); overflow-wrap: anywhere; }
+
+.identity { border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 9px; }
+.identity.is-hidden { display: none; }
+.identity__meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 8px 0 0; font-size: 11px; }
+.identity__meta dt { color: var(--ui-ink-faint); }
+.identity__meta dd { margin: 0; overflow-wrap: anywhere; }
+
+.stamp-preview {
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: var(--ui-radius);
+  padding: 8px;
+  background: var(--ui-surface-2);
+  min-height: 54px;
+  display: flex; align-items: center; justify-content: center;
+}
+.stamp-preview img { max-width: 100%; height: auto; }
+.stamp-preview .empty { font-size: 11px; }
+
+/* ── Bildirimler ────────────────────────────────────────────────────── */
+
+.toasts {
+  position: fixed; right: 16px; bottom: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 380px; z-index: 50;
+}
+
+.toast {
+  padding: 10px 13px;
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-left-width: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+}
+.toast--ok    { border-left-color: var(--ui-ok); }
+.toast--warn  { border-left-color: var(--ui-warn); }
+.toast--error { border-left-color: var(--ui-danger); }
+.toast__title { font-weight: 600; margin-bottom: 2px; }
+
+.is-hidden { display: none !important; }
+
+/* ── Dar ekran ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .workspace { grid-template-columns: 280px 1fr; }
+  .panel--right { display: none; }
+}
+@media (max-width: 800px) {
+  .workspace { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .panel--left { max-height: 45vh; }
+}
