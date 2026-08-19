@@ -8,6 +8,7 @@ import { el, clear, $, $$, kv, setOptions } from './lib/dom.js';
 import { api, toBase64, fromBase64, ApiError } from './lib/api.js';
 import { parsePfx, importSigningKey, signData, derToPem, BrowserPkcs12Error } from './signing/pkcs12.js';
 import { renderPanel } from './verify/panel.js';
+import { DocumentEditor } from './edit/document.js';
 
 /* ------------------------------------------------------------------ */
 /* Durum                                                                */
@@ -25,7 +26,8 @@ const state = {
   certPem: null,
   chainPems: [],
   zoom: 1,
-  verifyReport: null
+  verifyReport: null,
+  editor: null
 };
 
 const DEFAULT_HTML = `<article class="paper paper--kurumsal">
@@ -106,6 +108,7 @@ function updatePreview(html) {
   const frame = $('#preview');
   const doc = frame.contentDocument;
   if (!doc) return;
+  showHtmlPreview();
 
   doc.open();
   doc.write(
@@ -155,6 +158,28 @@ function markSelectedSlot(id) {
   for (const node of doc.querySelectorAll('[data-signer]')) {
     node.classList.toggle('is-selected', node.getAttribute('data-signer') === id);
   }
+}
+
+/**
+ * Yüklenmiş/üretilmiş bir PDF'i gösterir — tarayıcının yerleşik görüntüleyicisi.
+ *
+ * HTML önizlemesi AYRI bir çerçevede yaşar ve orada `sandbox` hiç kaldırılmaz:
+ * kullanıcı HTML'inin script çalıştırma ihtimali böylece yapısal olarak yok.
+ */
+function showPdfPreview(bytes) {
+  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+  state.previewUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+
+  $('#preview').classList.add('is-hidden');
+  const frame = $('#pdfPreview');
+  frame.classList.remove('is-hidden');
+  frame.src = state.previewUrl;
+}
+
+/** HTML önizlemesine geri döner. */
+function showHtmlPreview() {
+  $('#pdfPreview').classList.add('is-hidden');
+  $('#preview').classList.remove('is-hidden');
 }
 
 function setZoom(z) {
@@ -570,6 +595,30 @@ async function init() {
 
   $('#zoomIn').addEventListener('click', () => setZoom(state.zoom + 0.1));
   $('#zoomOut').addEventListener('click', () => setZoom(state.zoom - 0.1));
+
+  // Düzenle sekmesi: yüklenen PDF üzerinde artımlı düzenleme
+  state.editor = new DocumentEditor({
+    onStatus: status,
+    onToast: toast,
+    onError: handleError,
+    onChange: (pdf) => {
+      // Düzenlenen belge, imzalama ve doğrulama akışlarının da girdisi olur
+      state.pdf = pdf;
+      state.manifest = null;
+      state.verifyReport = null;
+      refreshSlotSelect();
+      $('#btnDownload').disabled = false;
+      $('#btnSign').disabled = !state.browserKey && !$('#serverSide').checked;
+      showPdfPreview(pdf);
+    }
+  });
+  state.editor.attach();
+
+  $('#btnEditToSign').addEventListener('click', async () => {
+    switchTab('sign');
+    await refreshVerifyPanel();
+    toast('Belge imzalama akışına aktarıldı.', 'ok');
+  });
 
   refreshStampPreview();
   status('Hazır');

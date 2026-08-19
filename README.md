@@ -35,6 +35,7 @@ packages/
 ├── pkcs12/     @fitfak/pkcs12     tam PFX okuma/yazma (RFC 7292, RC2 dâhil)
 ├── stamp/      @fitfak/stamp      slot tabanlı görsel damga motoru
 ├── pdf-html/   @fitfak/pdf-html   HTML + CSS → PDF derleyicisi
+├── pdf-doc/    @fitfak/pdf-doc    mevcut PDF'i okuma/düzenleme (xref stream, ObjStm)
 ├── paper/      @fitfak/paper      baskıya öncelikli CSS tasarım sistemi
 └── verify/     @fitfak/verify     imza doğrulama + ETSI raporu
 
@@ -185,7 +186,8 @@ vektörleri · damga geriye uyumu (piksel-piksel) · HTML/CSS motoru · doğrula
 
 Paket README'leri: [pkcs12](packages/pkcs12/README.md) ·
 [stamp](packages/stamp/README.md) · [pdf-html](packages/pdf-html/README.md) ·
-[paper](packages/paper/README.md) · [verify](packages/verify/README.md)
+[pdf-doc](packages/pdf-doc/README.md) · [paper](packages/paper/README.md) ·
+[verify](packages/verify/README.md)
 
 ---
 
@@ -197,7 +199,9 @@ Paket README'leri: [pkcs12](packages/pkcs12/README.md) ·
 - İmza oturumları kısa ömürlü (120 sn) ve **tek kullanımlık**.
 - Sunucu hiçbir şeyi diske yazmaz.
 - Arayüzde `innerHTML` kullanılmaz; kullanıcı içeriği yalnız `textContent` ile
-  yazılır ve önizleme script çalıştırmayan bir `sandbox` iframe içindedir.
+  yazılır ve HTML önizlemesi script çalıştırmayan bir `sandbox` iframe
+  içindedir. PDF önizlemesi ayrı bir çerçevede yaşar; böylece HTML çerçevesinin
+  `sandbox` niteliği hiçbir akışta kaldırılmaz.
 - CSP, `nosniff`, `frame-ancestors 'none'`, yol kaçışı koruması.
 - Doğrulanamayan bir iptal kanıtı **asla** DSS'e gömülmez.
 

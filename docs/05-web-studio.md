@@ -41,54 +41,63 @@ kendi API'leri.
 
 ---
 
-## 2. PDF Görüntüleyici (`apps/studio/js/viewer/`)
+## 2. PDF Görüntüleyici
 
-Bu, arayüzün en zorlu parçası. Harici kütüphane yok → kendimiz yazıyoruz.
-
-### 2.1 Strateji: iki yollu
+### 2.1 Uygulanan strateji: üç yollu
 
 | Kaynak | Yol | Neden |
 |--------|-----|-------|
-| **Bizim ürettiğimiz belgeler** | HTML'i sandbox'lı `<iframe>` içinde `@fitfak/paper` CSS'iyle göster | Gerçek WYSIWYG, kusursuz, anında; PDF'i rasterleştirmeye gerek yok |
-| **Yüklenen PDF'ler** | `<canvas>` üzerine kendi renderer'ımızla çiz | Rastgele PDF'i göstermenin başka yolu yok |
+| **Bizim ürettiğimiz belgeler (tasarım aşaması)** | HTML'i sandbox'lı `<iframe>` içinde `@fitfak/paper` CSS'iyle göster | Gerçek WYSIWYG, anında; rasterleştirmeye gerek yok |
+| **Yüklenen / üretilmiş PDF'ler** | `blob:` URL'li ayrı bir `<iframe>` — tarayıcının **yerleşik** PDF görüntüleyicisi | Sıfır kod, sıfır bağımlılık, tam doğruluk; arama ve yazdırma bedava gelir |
+| **Konum seçimi** | Sayfanın gerçek en/boy oranıyla çizilen şema üzerinde dikdörtgen sürükleme | Yerleşik görüntüleyicinin içine güvenilir biçimde bindirme yapılamaz |
 
-### 2.2 Canvas Renderer'ın Kapsamı (dürüst sınır)
+**Neden kendi canvas renderer'ımızı yazmadık.** İlk plan, `stamp.js`'in TTF
+kontur çıkarıcısını `Path2D`'ye bağlayarak kendi rasterleştiricimizi yazmaktı.
+Uygulama sırasında bunun **yanlış maliyet** olduğu görüldü: her tarayıcıda
+zaten üretim kalitesinde bir PDF görüntüleyici var, ve ondan alacağımız şey
+(doğru çizim, seçilebilir metin, yazdırma, erişilebilirlik) bizim aylarca
+yazacağımızdan iyi. Kendi renderer'ımız yalnızca *bindirme* (overlay)
+yeteneği kazandıracaktı — onu da sayfa şeması ile çok daha ucuza aldık.
 
+Bu, kapsamın bilinçli daraltılmasıdır: PDF **okuma ve düzenleme** işi
+`@fitfak/pdf-doc`'ta, tam doğrulukla ve sunucu tarafında yapılır; tarayıcı
+yalnız gösterir.
+
+### 2.2 Sandbox değişmezliği
+
+HTML önizlemesi ve PDF önizlemesi **ayrı çerçevelerdir**:
+
+```html
+<iframe id="preview"    sandbox="allow-same-origin"></iframe>  <!-- kullanıcı HTML'i -->
+<iframe id="pdfPreview"></iframe>                              <!-- blob: PDF -->
 ```
-apps/studio/js/viewer/
-├── lexer.js        PDF nesne ayrıştırıcı (pdf-doc'un ESM kardeşi)
-├── filters.js      Flate (DecompressionStream), A85, AHx, RunLength, LZW
-├── content.js      content stream operatör yorumlayıcısı
-├── graphics.js     grafik durumu (CTM, renk uzayı, çizgi stili, alfa)
-├── glyphs.js       TTF glyph outline → Path2D   ★ stamp.js'ten türetilir
-├── images.js       XObject → ImageBitmap (PNG/JPEG native; Flate raw → ImageData)
-└── page.js         sayfa çizim düzenleyicisi
+
+Yerleşik PDF görüntüleyicisi `sandbox` altında çalışmaz. Tek bir çerçeve
+paylaşılsaydı, PDF gösterirken `sandbox` niteliğini kaldırmak ve HTML'e
+dönerken geri koymak gerekirdi — çağrı sırası bozulduğunda kullanıcı HTML'i
+script çalıştırabilirdi. Ayrı çerçeveyle bu risk **yapısal olarak** yok:
+`#preview` üzerindeki `sandbox` hiçbir kod yolunda kaldırılmaz.
+
+Sunucu CSP'si buna göre `frame-src 'self' blob:` verir; `object-src 'none'`
+korunur.
+
+### 2.3 Konum seçici (`placer`)
+
+Şema, seçilen sayfanın gerçek `width × height` oranıyla çizilir ve ölçek
+`data-scale` içinde saklanır. Sürükleme bittiğinde tarayıcı koordinatları PDF
+kullanıcı uzayına çevrilir — **orijin sol-üstten sol-alta taşınır**:
+
+```js
+selection = {
+  x: left / scale,
+  y: (pageHeight - top / scale - height / scale),   // Y ekseni ters çevrilir
+  width: width / scale,
+  height: height / scale
+};
 ```
 
-| Destek | Durum |
-|--------|-------|
-| Yollar: `m l c v y re h`, dolgu/çizgi, `W n` kırpma | ✅ hedef |
-| Renk: `g rg k cs sc scn`, DeviceGray/RGB/CMYK, Indexed | ✅ hedef |
-| Metin: `BT ET Tf Td TD Tm T* Tj TJ '` " | ✅ hedef |
-| Gömülü TrueType/CID font → `Path2D` | ✅ hedef (`glyphs.js`) |
-| Type1/CFF font | 🟡 fallback: sistem sans-serif ile yaklaşık |
-| Görsel XObject (DCT/Flate) | ✅ hedef |
-| Form XObject | ✅ hedef |
-| Şeffaflık grupları, blend modu | 🟡 kısmi (`globalAlpha`) |
-| Shading (Type 2/3) | 🟡 Faz 3 |
-| JBIG2 / JPX | ❌ yer tutucu kutu + uyarı |
-
-**`glyphs.js` neden kolay:** `stamp.js` zaten TTF `glyf` tablosundan kontur çıkarıyor
-(`getGlyph`, `contourToPolygon`). Aynı kontur verisi, rasterleştirmek yerine
-`Path2D` + `quadraticCurveTo` ile canvas'a verilir. Tarayıcı kendi anti-aliasing'ini
-yapar. Yani en zor parça **zaten yazılmış**.
-
-### 2.3 Performans
-
-- Sayfalar tembel (lazy) render edilir; görünür alan ± 1 sayfa.
-- Render `OffscreenCanvas` + Web Worker'da; ana iş parçacığı kilitlenmez.
-- Zoom'da yeniden çizim `devicePixelRatio`'ya göre; sayfa bitmap'i önbelleklenir.
-- Küçük resim şeridi düşük çözünürlükte ayrı üretilir.
+Bu çeviri arayüzde **tek bir yerde** yapılır (`edit/document.js`); sunucu
+yalnız PDF koordinatı görür.
 
 ---
 
@@ -216,8 +225,9 @@ Saf `node:http`. Uygulama kodu ile sunucu kodu ayrı; iş mantığı paketlerde.
 | Yöntem | Yol | Girdi | Çıktı |
 |--------|-----|-------|-------|
 | `POST` | `/api/render` | `{ html, css, page, fonts, metadata }` | `{ pdf(b64), manifest, warnings }` |
-| `POST` | `/api/inspect` | pdf | `{ pages, outline, text, forms, signatures }` |
-| `POST` | `/api/edit` | `{ pdf, ops[] }` | `{ pdf }` (incremental) |
+| `POST` | `/api/inspect` | pdf | `{ byteLength, signatures }` |
+| `POST` | `/api/pdf/open` | `{ pdf, password? }` | `{ pageCount, pages[], info, fields, signatures, encrypted, hasForm }` |
+| `POST` | `/api/pdf/edit` | `{ pdf, password?, ops[] }` | `{ pdf, pageCount, applied[], preservedOriginal }` (artımlı) |
 | `POST` | `/api/stamp/preview` | `{ template, vars }` | png |
 | `POST` | `/api/sign/prepare` | `{ pdf, certPem, chainPems, rect, level, stamp }` | `{ sessionId, digest, alg }` |
 | `POST` | `/api/sign/finalize` | `{ sessionId, signature }` | `{ pdf, report }` |
@@ -225,6 +235,32 @@ Saf `node:http`. Uygulama kodu ile sunucu kodu ayrı; iş mantığı paketlerde.
 | `POST` | `/api/ltv/extend` | `{ pdf, targetLevel }` | `{ pdf, report }` |
 | `POST` | `/api/verify` | pdf | `VerifyReport` |
 | `GET`  | `/api/health` | — | `{ ok, version, tsa: {…} }` |
+
+### 6.1 `/api/pdf/edit` işlem listesi
+
+Tek istekte birden çok işlem sırayla uygulanır; hepsi **tek bir artımlı
+revizyona** yazılır. Koordinatlar PDF kullanıcı uzayındadır (orijin sol-**alt**,
+birim punto); tarayıcı sol-üst kullandığı için çeviri istemcide yapılır.
+
+| `op` | Alanlar |
+|------|---------|
+| `rotate` | `page`, `degrees` (90'ın katı, birikimli) |
+| `removePage` / `movePage` / `reorder` / `insertPage` | `page` · `from`,`to` · `order[]` · `index`,`size` |
+| `image` | `page`, `image` (b64 PNG/JPEG), `x`, `y`, `width`, `height?`, `rotate?`, `opacity?` |
+| `text` | `page`, `text`, `x`, `y`, `size?`, `color?`, `font?` |
+| `link` | `page`, `x`, `y`, `width`, `height`, `uri` |
+| `content` | `page`, `commands` (ham içerik akışı — `q … Q` ile sarmalanır) |
+| `metadata` | `values` (`title`, `author`, `subject`, `keywords`, `creator`, `producer`) |
+| `fillForm` | `values`, `flatten?`, `strict?` |
+| `flattenForm` | `only?` |
+
+Hata kodları: `ERR_OP_UNKNOWN`, `ERR_OP_ARG`, `ERR_OPS_MISSING`,
+`ERR_PDF_OPEN`, `ERR_CRYPT_BAD_PASSWORD`.
+
+**İmza güvencesi:** düzenleme her zaman artımlıdır, orijinal baytlara
+dokunulmaz. Belgede imza varsa geçerli kalır; doğrulama raporu değişikliği
+`modifiedAfterSigning: true` ile açıkça bildirir. `rewrite: true` ile tam
+yeniden yazım istenirse imzalı belgede `ERR_WOULD_BREAK_SIGNATURE` döner.
 
 **Sözleşme kuralları**
 - Gövde `application/json` (base64 PDF) veya `application/octet-stream`.
@@ -249,8 +285,7 @@ apps/studio/
 │   ├── main.js              önyükleme, yönlendirme
 │   ├── state.js             küçük gözlemlenebilir durum deposu (~80 satır)
 │   ├── ui/                  panel, sekme, iletişim kutusu, bildirim bileşenleri
-│   ├── viewer/              §2'deki canvas renderer
-│   ├── editor/              sayfa işlemleri, görsel yerleştirme, seçim tutamaçları
+│   ├── edit/                sayfa işlemleri, görsel/metin yerleştirme, form doldurma
 │   ├── signing/             pkcs12 (ESM), webcrypto imzalayıcı, iki fazlı akış
 │   ├── verify/              rapor render'ı
 │   └── lib/                 coords.js, bytes.js, dom.js

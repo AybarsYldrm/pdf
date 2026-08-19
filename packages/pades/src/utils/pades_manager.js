@@ -7,6 +7,7 @@ const { buildTSQ, requestTimestamp, extractTimeStampTokenOrThrow } = require('..
 const { OIDS } = require('../cades/oids');
 const { buildCAdES_BES_auto, buildCAdES_BES_withSigner, addUnsignedAttr_signatureTimeStampToken, buildSignedData } = require('../cades/cades_builder');
 const { resolveSigner } = require('../signer');
+const { normalizePdf, needsNormalization } = require('./normalize');
 
 // TSA hash adı -> OID
 const HASH_NAME_TO_OID = {
@@ -91,12 +92,25 @@ class PAdESManager {
   }
 
   /**
+   * PDF 1.5+ çapraz başvuru akışlarını / nesne akışlarını klasik xref tablosuna
+   * köprüler. Zaten klasik yapıdaysa aynı Buffer geri döner (kopya yok).
+   * Orijinal baytlar korunduğu için mevcut imzalar bozulmaz.
+   */
+  _normalize(pdfBuffer) {
+    const res = normalizePdf(pdfBuffer);
+    if (res.normalized) {
+      this._logDebug('normalizePdf', { reason: res.reason, pageCount: res.pageCount });
+    }
+    return res.pdf;
+  }
+
+  /**
    * DocTimeStamp (ETSI.RFC3161) — imza olmadan yalnız TSA damgası ekler.
    * AcroForm/Sig yoksa görünmez bir /Sig alanı otomatik eklenir.
    */
   async addDocTimeStamp({ pdfBuffer, fieldName = null, placeholderHexLen = 64000 }) {
     const normalizedFieldName = (typeof fieldName === 'string' && fieldName.length > 0) ? fieldName : null;
-    let workingPdf = pdfBuffer;
+    let workingPdf = this._normalize(pdfBuffer);
 
     if (normalizedFieldName) {
       workingPdf = ensureAcroFormAndEmptySigField(workingPdf, normalizedFieldName);
@@ -180,7 +194,7 @@ class PAdESManager {
     });
     const visiblePage = (visibleSignature && typeof visibleSignature.page === 'number')
       ? visibleSignature.page : 0;
-    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1', visiblePage);
+    pdfBuffer = ensureAcroFormAndEmptySigField(this._normalize(pdfBuffer), fieldName || 'Sig1', visiblePage);
     // KeyUsage kontrolü (auto fallback DocTS)
     const leafDer = pemToDer(certPem);
     const subjectCN = (() => {
@@ -350,7 +364,7 @@ class PAdESManager {
     this._logDebug('PAdES-B.sign.start', { fieldName });
     const visiblePageB = (visibleSignature && typeof visibleSignature.page === 'number')
       ? visibleSignature.page : 0;
-    pdfBuffer = ensureAcroFormAndEmptySigField(pdfBuffer, fieldName || 'Sig1', visiblePageB);
+    pdfBuffer = ensureAcroFormAndEmptySigField(this._normalize(pdfBuffer), fieldName || 'Sig1', visiblePageB);
     const leafDer = pemToDer(certPem);
     const subjectCN = (() => {
       try { return extractSubjectCN(leafDer) || null; } catch (err) { return null; }
@@ -444,6 +458,7 @@ class PAdESManager {
     const { findAllSignatures } = require('./pdf_parser');
 
     const now = validationTime || new Date();
+    pdfBuffer = this._normalize(pdfBuffer);
     const writer = new PDFPAdESWriter(pdfBuffer);
     const signatures = findAllSignatures(pdfBuffer);
 

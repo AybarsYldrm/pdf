@@ -1,8 +1,8 @@
 # 06 — Yol Haritası
 
 > **DURUM (bu dalda):** Faz 0, 1, 2, 3, 4, 6 ve 7 **tamamlandı** ve testleriyle
-> birlikte depoda. Faz 5 (`@fitfak/pdf-doc` — PDF okuma/düzenleme, xref stream +
-> ObjStm) ve Faz 6d (PDF/A, PDF/UA) ile Faz 8 (CLI, cilalama) **açık**.
+> birlikte depoda. Faz 5 (`@fitfak/pdf-doc` — PDF okuma/düzenleme) de
+> **tamamlandı**. Faz 6d (PDF/A, PDF/UA) ile Faz 8 (CLI, cilalama) **açık**.
 > Aşağıdaki plan olduğu gibi bırakıldı; tamamlananlar ✅ ile işaretlendi.
 
 Fazlar sıralıdır: her faz, bir öncekinin çıktısını temel alır. Her fazın sonunda
@@ -114,22 +114,38 @@ Faz 1 ve 2'yi **kanıtlayan** faz. Aslında Faz 1 ile paralel yürütülmeli.
 
 ---
 
-## ⬜ Faz 5 — PDF Okuma/Düzenleme · ~10 AG
+## ✅ Faz 5 — PDF Okuma/Düzenleme · ~10 AG
 
-| # | İş | Kabul kriteri |
-|---|-----|---------------|
-| 5.1 | `@fitfak/pdf-doc`: tam lexer + nesne modeli | — |
-| 5.2 | **Xref stream + ObjStm** desteği | Word/Chrome/InDesign PDF'leri açılır (bulgu 3.1.3) |
-| 5.3 | Filtreler: Flate+Predictor, LZW, A85, AHx, RunLength | Test korpusu açılır |
-| 5.4 | Şifre çözme: RC4-40/128, AES-128/256 | Parolalı PDF açılır |
-| 5.5 | Bozuk xref kurtarma (tam tarama) | Hasarlı dosyalar açılır |
-| 5.6 | Incremental update yazıcı + imza koruma güvencesi | İmzalı PDF'e sayfa eklenir, imza geçerli kalır |
-| 5.7 | Sayfa işlemleri: ekle/sil/taşı/döndür/böl/birleştir | API testleri |
-| 5.8 | Görsel yerleştirme (konum, ölçek, döndürme, saydamlık) | Studio'dan sürükle-bırak |
-| 5.9 | Metin ekleme (font gömme/subset ile) | Türkçe karakterler doğru |
-| 5.10 | AcroForm okuma/doldurma/düzleştirme | Doldurulabilir form senaryosu |
-| 5.11 | Content stream metin çıkarımı (`/ToUnicode`) | Arama çalışır |
-| 5.12 | `pades`'i `pdf-doc` üzerine taşı | Tek parser; senaryo 12 yeşil |
+| # | İş | Kabul kriteri | Durum |
+|---|-----|---------------|-------|
+| 5.1 | `@fitfak/pdf-doc`: tam lexer + nesne modeli | — | ✅ `src/lexer.js`, `src/document.js` |
+| 5.2 | **Xref stream + ObjStm** desteği | Word/Chrome/InDesign PDF'leri açılır (bulgu 3.1.3) | ✅ `src/xref.js` |
+| 5.3 | Filtreler: Flate+Predictor, LZW, A85, AHx, RunLength | Test korpusu açılır | ✅ `src/filters.js` |
+| 5.4 | Şifre çözme: RC4-40/128, AES-128/256 | Parolalı PDF açılır | ✅ `src/crypt.js` — yazarken de şifreler |
+| 5.5 | Bozuk xref kurtarma (tam tarama) | Hasarlı dosyalar açılır | ✅ kaydederken tablo yeniden kurulur |
+| 5.6 | Incremental update yazıcı + imza koruma güvencesi | İmzalı PDF'e sayfa eklenir, imza geçerli kalır | ✅ `06-pdf-doc-signing.test.js` |
+| 5.7 | Sayfa işlemleri: ekle/sil/taşı/döndür/böl/birleştir | API testleri | ✅ `src/edit.js` |
+| 5.8 | Görsel yerleştirme (konum, ölçek, döndürme, saydamlık) | Studio'dan sürükle-bırak | ✅ "Düzenle" sekmesi + `/api/pdf/edit` |
+| 5.9 | Metin ekleme (font gömme/subset ile) | Türkçe karakterler doğru | ✅ WinAnsi + `/Differences` (Gbreve, dotlessi…) |
+| 5.10 | AcroForm okuma/doldurma/düzleştirme | Doldurulabilir form senaryosu | ✅ `src/acroform.js` — imza alanı korunur |
+| 5.11 | Content stream metin çıkarımı (`/ToUnicode`) | Arama çalışır | ✅ `src/text.js` — Form XObject'lere iner |
+| 5.12 | `pades`'i `pdf-doc` üzerine taşı | Tek parser; senaryo 12 yeşil | ✅ `pades/src/utils/normalize.js` köprüsü |
+
+### 5.12 nasıl çözüldü — "klasik xref köprüsü"
+
+PAdES yazıcısını modern parser'a taşımak yerine, modern belgeye **klasik bir
+xref tablosu ekliyoruz**. Orijinal baytlara dokunulmadığı için belgede zaten
+var olan imzalar bozulmaz:
+
+```
+[ orijinal bayt dizisi — HİÇ DEĞİŞTİRİLMEZ ]
+[ /ObjStm içindeki nesnelerin açık kopyaları ]
+[ tüm nesneleri kapsayan klasik xref tablosu ]
+[ trailer + startxref + %%EOF                ]
+```
+
+Böylece tek bir kod yolu hem PAdES yazıcısını hem de dış dünyadan gelen
+PDF 1.5+ dosyalarını karşılar.
 
 ---
 

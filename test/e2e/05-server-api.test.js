@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const crypto = require('crypto');
 const path = require('path');
 
+const fs = require('fs');
 const { startTestServices } = require('./pki/services');
 const { createServer } = require('../../apps/server/server');
 const { verifyPdf, INDICATION } = require('@fitfak/verify');
@@ -280,4 +281,193 @@ test('Statik dosyalar servis edilir ve yol kaçışı engellenir', async () => {
   const js = await fetch(base + '/js/main.js');
   assert.strictEqual(js.status, 200);
   assert.strictEqual(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
+});
+
+/* ================================================================== */
+/* Belge düzenleme uçları                                             */
+/* ================================================================== */
+
+/** Test PKI'sinden imzalamaya hazır bir PFX üretir. */
+function makePfx(password = 'e') {
+  const p = svc.pki.profile('signer');
+  return p12.build({
+    privateKeyPem: p.keyPem, certificatePem: p.certPem,
+    chainPems: p.chainPems, password, friendlyName: p.name
+  });
+}
+
+const FIX = path.join(__dirname, '..', 'fixtures', 'pdf');
+if (!fs.existsSync(path.join(FIX, 'acroform.pdf'))) {
+  require(path.join(FIX, 'generate.js')).generateAll();
+}
+const fixture = (name) => fs.readFileSync(path.join(FIX, name));
+
+test('/api/pdf/open modern PDF yapılarını açar ve özetler', async () => {
+  const res = await call('/api/pdf/open', { pdf: b64(fixture('xref-stream.pdf')) });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.pageCount, 2);
+  assert.strictEqual(res.body.encrypted, false);
+  assert.strictEqual(res.body.hasSignatures, false);
+  assert.strictEqual(res.body.info.Title, 'XRef akisli belge');
+
+  const page = res.body.pages[0];
+  assert.strictEqual(Math.round(page.width), 595);
+  assert.strictEqual(Math.round(page.height), 842);
+  assert.match(page.text, /XRef akisi/, 'sayfa metni çıkarılabilmeli');
+});
+
+test('/api/pdf/open form alanlarını ve imza alanını ayırır', async () => {
+  const res = await call('/api/pdf/open', { pdf: b64(fixture('acroform.pdf')) });
+
+  assert.strictEqual(res.body.hasForm, true);
+  const byName = new Map(res.body.fields.map((f) => [f.name, f]));
+  assert.strictEqual(byName.get('adres').multiline, true);
+  assert.deepStrictEqual(byName.get('sehir').options, ['Ankara', 'Istanbul', 'Izmir']);
+  assert.strictEqual(byName.get('imza').type, 'Sig');
+  assert.deepStrictEqual(byName.get('ad').rect, [140, 720, 400, 740]);
+});
+
+test('/api/pdf/open şifreli belgede parola ister', async () => {
+  const withoutPassword = await call('/api/pdf/open',
+    { pdf: b64(fixture('encrypted-rc4-userpwd.pdf')) });
+  assert.strictEqual(withoutPassword.status, 400);
+  assert.strictEqual(withoutPassword.body.error.code, 'ERR_CRYPT_BAD_PASSWORD');
+
+  const withPassword = await call('/api/pdf/open',
+    { pdf: b64(fixture('encrypted-rc4-userpwd.pdf')), password: 'gizli' });
+  assert.strictEqual(withPassword.status, 200);
+  assert.strictEqual(withPassword.body.encrypted, true);
+  assert.strictEqual(withPassword.body.pageCount, 1);
+});
+
+test('/api/pdf/edit görsel, metin, bağlantı ve üst veri yazar', async () => {
+  const original = fixture('classic-xref.pdf');
+  const png = fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'studio', 'favicon.png'));
+
+  const res = await call('/api/pdf/edit', {
+    pdf: b64(original),
+    ops: [
+      { op: 'image', page: 0, image: b64(png), x: 420, y: 700, width: 90, opacity: 0.8 },
+      { op: 'text', page: 0, text: 'Onaylandı — ĞÜŞİÖÇ', x: 60, y: 120, size: 11 },
+      { op: 'link', page: 0, x: 60, y: 100, width: 180, height: 14, uri: 'https://aybars.net.tr/' },
+      { op: 'metadata', values: { title: 'Düzenlenmiş belge', author: 'Studio' } }
+    ]
+  });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.preservedOriginal, true);
+  assert.strictEqual(res.body.applied.length, 4);
+  assert.deepStrictEqual(res.body.applied[0].pixels, [32, 32]);
+
+  const out = unb64(res.body.pdf);
+  assert.ok(out.subarray(0, original.length).equals(original),
+    'artımlı yazımda orijinal baytlar korunmalı');
+
+  const reopened = await call('/api/pdf/open', { pdf: res.body.pdf });
+  assert.strictEqual(reopened.body.info.Title, 'Düzenlenmiş belge');
+  assert.match(reopened.body.pages[0].text, /Onaylandı — ĞÜŞİÖÇ/);
+});
+
+test('/api/pdf/edit sayfa işlemlerini uygular', async () => {
+  const res = await call('/api/pdf/edit', {
+    pdf: b64(fixture('classic-xref-3p.pdf')),
+    ops: [
+      { op: 'movePage', from: 0, to: 2 },
+      { op: 'rotate', page: 0, degrees: 90 },
+      { op: 'insertPage', index: 0, size: [0, 0, 300, 300] },
+      { op: 'removePage', page: 3 }
+    ]
+  });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.pageCount, 3);
+
+  const reopened = await call('/api/pdf/open', { pdf: res.body.pdf });
+  assert.strictEqual(reopened.body.pages[0].width, 300);
+  assert.strictEqual(reopened.body.pages[1].rotate, 90);
+});
+
+test('/api/pdf/edit formu doldurur ve düzleştirir', async () => {
+  const res = await call('/api/pdf/edit', {
+    pdf: b64(fixture('acroform.pdf')),
+    ops: [{
+      op: 'fillForm',
+      values: { ad: 'Aybars YILDIRIM', sehir: 'Izmir', onay: true, imza: 'olmaz' },
+      flatten: true
+    }]
+  });
+
+  assert.strictEqual(res.status, 200);
+  const report = res.body.applied[0];
+  assert.deepStrictEqual(report.filled.sort(), ['ad', 'onay', 'sehir']);
+  assert.deepStrictEqual(report.skipped.map((s) => s.name), ['imza']);
+  assert.deepStrictEqual(report.kept, ['imza']);
+
+  const reopened = await call('/api/pdf/open', { pdf: res.body.pdf });
+  assert.deepStrictEqual(reopened.body.fields.map((f) => f.name), ['imza']);
+  assert.match(reopened.body.pages[0].text, /Aybars YILDIRIM/);
+});
+
+test('/api/pdf/edit hatalı işlemi anlaşılır kodla reddeder', async () => {
+  const unknown = await call('/api/pdf/edit', {
+    pdf: b64(fixture('classic-xref.pdf')),
+    ops: [{ op: 'boyleBirSeyYok' }]
+  });
+  assert.strictEqual(unknown.status, 400);
+  assert.strictEqual(unknown.body.error.code, 'ERR_OP_UNKNOWN');
+
+  const badArg = await call('/api/pdf/edit', {
+    pdf: b64(fixture('classic-xref.pdf')),
+    ops: [{ op: 'text', page: 0, text: 'x', x: 'buraya', y: 10 }]
+  });
+  assert.strictEqual(badArg.status, 400);
+  assert.strictEqual(badArg.body.error.code, 'ERR_OP_ARG');
+
+  const noOps = await call('/api/pdf/edit', { pdf: b64(fixture('classic-xref.pdf')), ops: [] });
+  assert.strictEqual(noOps.body.error.code, 'ERR_OPS_MISSING');
+});
+
+test('Düzenlenen modern PDF sonrasında imzalanabilir', async () => {
+  const pfx = makePfx();
+
+  const edited = await call('/api/pdf/edit', {
+    pdf: b64(fixture('xref-stream.pdf')),
+    ops: [{ op: 'text', page: 0, text: 'hazirlayan: studio', x: 60, y: 80, size: 9 }]
+  });
+  assert.strictEqual(edited.status, 200);
+
+  const signed = await call('/api/sign/pfx', {
+    pdf: edited.body.pdf, pfx: b64(pfx), password: 'e', level: 'T'
+  });
+  assert.strictEqual(signed.status, 200, JSON.stringify(signed.body.error || {}));
+  assert.strictEqual(signed.body.achievedLevel, 'pades-t');
+
+  const report = await verifyPdf(unb64(signed.body.pdf), {
+    trustAnchors: [svc.pki.root.certPem], offline: true
+  });
+  assert.strictEqual(report.signatures[0].indication, INDICATION.PASSED);
+});
+
+test('İmzalı belge düzenlenince imza geçerli kalır (uçtan uca)', async () => {
+  const pfx = makePfx();
+
+  const signed = await call('/api/sign/pfx', {
+    pdf: b64(fixture('classic-xref-3p.pdf')), pfx: b64(pfx), password: 'e', level: 'T'
+  });
+  assert.strictEqual(signed.status, 200);
+
+  const edited = await call('/api/pdf/edit', {
+    pdf: signed.body.pdf,
+    ops: [{ op: 'text', page: 0, text: 'imzadan sonra', x: 60, y: 60, size: 9 }]
+  });
+  assert.strictEqual(edited.status, 200);
+
+  const report = await verifyPdf(unb64(edited.body.pdf), {
+    trustAnchors: [svc.pki.root.certPem], offline: true
+  });
+  assert.strictEqual(report.signatures[0].indication, INDICATION.PASSED);
+  assert.strictEqual(report.signatures[0].cms.signatureValid, true);
+  assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
+    'değişiklik gizlenmemeli');
 });

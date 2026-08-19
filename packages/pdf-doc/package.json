@@ -1,0 +1,12 @@
+{
+  "name": "@fitfak/pdf-doc",
+  "version": "1.0.0",
+  "description": "PDF okuma ve artımlı düzenleme — xref stream, object stream, filtreler, şifre çözme.",
+  "main": "index.js",
+  "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "files": ["index.js", "src/"],
+  "keywords": ["pdf", "parser", "xref", "objstm", "incremental-update"],
+  "publishConfig": { "access": "public" }
+}

@@ -302,6 +302,71 @@ html, body {
 .stamp-preview img { max-width: 100%; height: auto; }
 .stamp-preview .empty { font-size: 11px; }
 
+/* ── Düzenle sekmesi ────────────────────────────────────────────────── */
+
+.pane__actions--wrap { flex-wrap: wrap; align-items: flex-end; }
+
+.btn--sm { padding: 5px 10px; font-size: 12px; }
+.btn--danger { border-color: var(--ui-danger); color: var(--ui-danger); }
+.btn--danger:hover:not(:disabled) { background: var(--ui-danger-soft); border-color: var(--ui-danger); }
+
+.field--inline { flex: 0 0 auto; width: 84px; }
+.input--num { text-align: right; }
+
+.docmeta {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  padding: 9px;
+  background: var(--ui-surface-2);
+}
+.kv--compact { font-size: 11px; }
+
+.notice {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border-radius: var(--ui-radius);
+  border-left: 3px solid var(--ui-border-strong);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ui-ink-soft);
+  background: var(--ui-surface);
+}
+.notice--info { border-left-color: var(--ui-accent); background: var(--ui-accent-soft); }
+
+/* Sayfa şeması: gerçek en/boy oranıyla çizilir, üstünde dikdörtgen seçilir. */
+.placer { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+.placer__sheet {
+  position: relative;
+  width: 170px; height: 240px;
+  background: #fff;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 2px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+  cursor: crosshair;
+  touch-action: none;
+  background-image:
+    linear-gradient(to right, rgba(20, 45, 95, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(20, 45, 95, 0.06) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.placer__rect {
+  position: absolute;
+  border: 1.5px solid var(--ui-accent);
+  background: rgba(20, 45, 95, 0.14);
+  pointer-events: none;
+}
+
+.placer__readout {
+  font-family: var(--ui-mono);
+  font-size: 11px;
+  color: var(--ui-ink-faint);
+}
+
+.formfields { display: flex; flex-direction: column; gap: 4px; }
+.check__box { margin-right: 6px; }
+
 /* ── Bildirimler ────────────────────────────────────────────────────── */
 
 .toasts {

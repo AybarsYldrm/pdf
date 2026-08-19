@@ -27,6 +27,7 @@ const { findAllSignatures } = require('@fitfak/pades/src/utils/pdf_parser');
 const { prepareCAdES, completeCAdES } = require('@fitfak/pades/src/cades/cades_builder');
 const { verifyPdf } = require('@fitfak/verify');
 const p12 = require('@fitfak/pkcs12');
+const pdfDoc = require('@fitfak/pdf-doc');
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
@@ -81,6 +82,10 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy':
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
     "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; " +
+    // PDF önizlemesi blob: URL'li bir <iframe>'de, tarayıcının yerleşik
+    // görüntüleyicisiyle açılır. `object-src 'none'` korunur: eklenti
+    // gömülmesine hâlâ izin yok.
+    "frame-src 'self' blob:; " +
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 };
 
@@ -191,6 +196,91 @@ const routes = {
       signatures: sigs.map((s) => ({
         type: s.type, subFilter: s.subFilter, byteRange: s.byteRange, vriKeys: s.vriKeys
       }))
+    });
+  },
+
+  /**
+   * Yüklenen bir PDF'i AÇAR: sayfa geometrileri, üst veri, form alanları,
+   * imzalar ve metin özeti. Xref akışı / nesne akışı / şifreli belgeler dâhil.
+   */
+  'POST /api/pdf/open': async (req, res) => {
+    const body = await readJson(req);
+    const pdf = unb64(body.pdf);
+    if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
+
+    let doc;
+    try {
+      doc = pdfDoc.PdfDocument.load(pdf, { password: body.password || '' });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
+    }
+
+    const pages = [];
+    for (let i = 0; i < doc.pageCount; i++) {
+      const g = doc.getPageGeometry(i);
+      pages.push({
+        index: i,
+        width: round(g.width), height: round(g.height), rotate: g.rotate,
+        mediaBox: g.mediaBox.map(round), cropBox: g.cropBox.map(round),
+        text: body.text === false ? undefined : safe(() => doc.extractText(i), '').slice(0, 4000)
+      });
+    }
+
+    sendJson(res, 200, {
+      byteLength: pdf.length,
+      pageCount: doc.pageCount,
+      pages,
+      encrypted: doc.isEncrypted,
+      recovered: doc.xref.recovered || !!doc.offsetsRepaired,
+      hasSignatures: doc.hasSignatures,
+      hasForm: doc.hasForm,
+      info: doc.getInfo(),
+      fields: safe(() => doc.listFields().map((f) => ({
+        name: f.name, type: f.type, value: f.value, options: f.options,
+        readOnly: f.readOnly, required: f.required, multiline: f.multiline,
+        radio: f.radio, page: f.page, rect: f.rect
+      })), []),
+      signatures: findAllSignatures(pdf).map((s) => ({
+        type: s.type, subFilter: s.subFilter, byteRange: s.byteRange
+      }))
+    });
+  },
+
+  /**
+   * Belgeyi ARTIMLI olarak düzenler: sayfa işlemleri, görsel/metin/bağlantı
+   * yerleştirme, form doldurma, üst veri. İmzalı belgelerde önceki imzalar
+   * geçerli kalır (orijinal baytlara dokunulmaz).
+   */
+  'POST /api/pdf/edit': async (req, res) => {
+    const body = await readJson(req);
+    const pdf = unb64(body.pdf);
+    if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
+    if (!Array.isArray(body.ops) || !body.ops.length) {
+      return sendError(res, 400, 'ERR_OPS_MISSING', 'ops dizisi zorunlu');
+    }
+
+    let doc;
+    try {
+      doc = pdfDoc.PdfDocument.load(pdf, { password: body.password || '' });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
+    }
+
+    const applied = [];
+    try {
+      for (const op of body.ops) applied.push(applyOp(doc, op));
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_EDIT_FAILED', err.message,
+        { appliedCount: applied.length });
+    }
+
+    const out = doc.save({ full: body.rewrite === true, force: body.force === true });
+    sendJson(res, 200, {
+      pdf: b64(out),
+      byteLength: out.length,
+      pageCount: pdfDoc.PdfDocument.load(out).pageCount,
+      preservedOriginal: !body.rewrite,
+      applied
     });
   },
 
@@ -433,6 +523,113 @@ const routes = {
     sendJson(res, 200, report);
   }
 };
+
+/* ------------------------------------------------------------------ */
+/* Belge düzenleme işlemleri                                            */
+/* ------------------------------------------------------------------ */
+
+class EditRequestError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
+const round = (n) => Math.round(Number(n) * 100) / 100;
+
+/** Hata fırlatan bir okumayı yedek değerle sarar. */
+function safe(fn, fallback) {
+  try { return fn(); } catch { return fallback; }
+}
+
+function requireNumber(value, label) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new EditRequestError('ERR_OP_ARG', `${label} sayı olmalı`);
+  return n;
+}
+
+/**
+ * Tek bir düzenleme işlemini uygular.
+ *
+ * Koordinatlar PDF kullanıcı uzayındadır: orijin sol-ALT köşe, birim punto.
+ * Tarayıcı sol-ÜST kullandığı için istemci `y`'yi çevirmelidir.
+ */
+function applyOp(doc, op) {
+  const kind = String(op && op.op || '');
+
+  switch (kind) {
+    case 'rotate':
+      doc.rotatePage(requireNumber(op.page, 'page'), requireNumber(op.degrees, 'degrees'));
+      return { op: kind, page: op.page };
+
+    case 'removePage':
+      doc.removePage(requireNumber(op.page, 'page'));
+      return { op: kind, page: op.page };
+
+    case 'movePage':
+      doc.movePage(requireNumber(op.from, 'from'), requireNumber(op.to, 'to'));
+      return { op: kind, from: op.from, to: op.to };
+
+    case 'reorder':
+      doc.reorderPages(op.order);
+      return { op: kind, order: op.order };
+
+    case 'insertPage': {
+      const ref = doc.insertPage(requireNumber(op.index, 'index'),
+        { size: op.size, rotate: op.rotate });
+      return { op: kind, index: op.index, objNum: ref.num };
+    }
+
+    case 'image': {
+      const image = unb64(op.image);
+      if (!image.length) throw new EditRequestError('ERR_OP_ARG', 'image (base64) zorunlu');
+      const info = doc.addImage(requireNumber(op.page, 'page'), image, {
+        x: requireNumber(op.x, 'x'),
+        y: requireNumber(op.y, 'y'),
+        width: requireNumber(op.width, 'width'),
+        height: op.height != null ? Number(op.height) : undefined,
+        rotate: Number(op.rotate) || 0,
+        opacity: op.opacity != null ? Number(op.opacity) : undefined
+      });
+      return { op: kind, page: op.page, name: info.name, pixels: [info.width, info.height] };
+    }
+
+    case 'text': {
+      const res = doc.addText(requireNumber(op.page, 'page'), String(op.text || ''), {
+        x: requireNumber(op.x, 'x'),
+        y: requireNumber(op.y, 'y'),
+        size: op.size != null ? Number(op.size) : undefined,
+        color: Array.isArray(op.color) ? op.color.map(Number) : undefined,
+        font: op.font
+      });
+      return { op: kind, page: op.page, fontName: res.fontName };
+    }
+
+    case 'link':
+      doc.addLink(requireNumber(op.page, 'page'), {
+        x: requireNumber(op.x, 'x'), y: requireNumber(op.y, 'y'),
+        width: requireNumber(op.width, 'width'), height: requireNumber(op.height, 'height')
+      }, String(op.uri || ''));
+      return { op: kind, page: op.page };
+
+    case 'content':
+      doc.appendContent(requireNumber(op.page, 'page'), String(op.commands || ''));
+      return { op: kind, page: op.page };
+
+    case 'metadata':
+      doc.setMetadata(op.values || {});
+      return { op: kind, keys: Object.keys(op.values || {}) };
+
+    case 'fillForm': {
+      const report = doc.fillForm(op.values || {}, { strict: op.strict === true });
+      if (op.flatten) Object.assign(report, doc.flattenForm({ only: op.only }));
+      return { op: kind, ...report };
+    }
+
+    case 'flattenForm':
+      return { op: kind, ...doc.flattenForm({ only: op.only }) };
+
+    default:
+      throw new EditRequestError('ERR_OP_UNKNOWN', `Bilinmeyen işlem: ${kind || '(boş)'}`);
+  }
+}
 
 /** İstek gövdesinden görünür imza yapılandırması kurar. */
 function buildVisibleForRequest(body) {

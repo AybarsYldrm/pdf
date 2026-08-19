@@ -58,6 +58,9 @@ export const api = {
   health:        () => request('/api/health', null, 'GET'),
   render:        (payload) => request('/api/render', payload),
   inspect:       (pdfBytes) => request('/api/inspect', { pdf: toBase64(pdfBytes) }),
+  pdfOpen:       (pdfBytes, password) =>
+                   request('/api/pdf/open', { pdf: toBase64(pdfBytes), password: password || undefined }),
+  pdfEdit:       (payload) => request('/api/pdf/edit', payload),
   stampPreview:  (payload) => request('/api/stamp/preview', payload),
   pfxIdentities: (pfxBytes, password) =>
                    request('/api/pfx/identities', { pfx: toBase64(pfxBytes), password }),
