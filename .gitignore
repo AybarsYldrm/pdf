@@ -152,6 +152,8 @@ tmp/
 temp_draft.pdf
 signed*.pdf
 tsa_serial.bin
+# Uyumluluk örnekleri: 'npm run conformance:report' ile üretilir (RAPOR.md depoda)
+docs/conformance/ornekler/
 !test/fixtures/**/*.pfx
 !test/fixtures/**/*.p12
 !test/fixtures/certs/

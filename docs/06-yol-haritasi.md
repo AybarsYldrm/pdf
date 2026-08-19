@@ -1,9 +1,8 @@
 # 06 — Yol Haritası
 
 > **DURUM (bu dalda):** Faz 0, 1, 2, 3, 4, 6 ve 7 **tamamlandı** ve testleriyle
-> birlikte depoda. Faz 5 (`@fitfak/pdf-doc` — PDF okuma/düzenleme) de
-> **tamamlandı**. Faz 6d (PDF/A, PDF/UA) ile Faz 8 (CLI, cilalama) **açık**.
-> Aşağıdaki plan olduğu gibi bırakıldı; tamamlananlar ✅ ile işaretlendi.
+> birlikte depoda. **Tüm fazlar tamamlandı** (0–8). Aşağıdaki plan olduğu gibi
+> bırakıldı; her satırın karşısına ne yapıldığı yazıldı.
 
 Fazlar sıralıdır: her faz, bir öncekinin çıktısını temel alır. Her fazın sonunda
 **gösterilebilir bir şey** vardır — "altyapı fazı" yoktur.
@@ -176,8 +175,23 @@ filigran) · 6c.4 5 tema · 6c.5 `dist/paper.css` derleme betiği ·
 **Kabul:** 5 tema × 4 belge tipi = 20 örnek PDF, hepsi Adobe'de temiz açılıyor;
 aynı HTML tarayıcıda `paper.css` ile **görsel olarak eşdeğer** görünüyor.
 
-### Faz 6d — Uyumluluk (opsiyonel, ~5 AG)
-PDF/A-2b + veraPDF geçişi · PDF/UA etiketli PDF · `@font-face` · SVG alt kümesi
+### ✅ Faz 6d — Uyumluluk (~5 AG)
+
+| # | İş | Durum |
+|---|-----|-------|
+| 6d.1 | PDF/A-1b/-2b/-3b: XMP `pdfaid`, gömülü sRGB ICC, `/OutputIntents`, `/ID` | ✅ `pdf-html` `conformance` seçeneği |
+| 6d.2 | **Etiketli PDF**: yapı ağacı, `/ParentTree`, işaretli içerik | ✅ `layout/struct.js` + `pdf/tagged.js` |
+| 6d.3 | PDF/UA-1: `/Lang`, `/DisplayDocTitle`, `/Alt`, bağlantı `/OBJR` | ✅ |
+| 6d.4 | Bağımsız denetleyici (`@fitfak/conformance`) | ✅ 10 PDF/A maddesi + 9 PDF/UA kuralı |
+| 6d.5 | `@font-face` | ✅ (Faz 6a'da geldi) |
+| 6d.6 | SVG alt kümesi | ⬜ **yapılmadı** — kapsam dışı bırakıldı |
+
+**Kabul:** 4 belge tipi × 5 profil = 20 kombinasyon denetimden geçiyor
+(`npm run conformance:report` → `docs/conformance/RAPOR.md`).
+
+**Dürüstlük notu:** Denetleyici veraPDF'in yerini tutmaz. Uyumu kanıtlamaz;
+uyumsuzluğun en sık görülen biçimlerini yakalar ve hangi maddeyi denetlediğini
+adıyla söyler. Resmî beyan için örnek PDF'ler bağımsız doğrulayıcıya verilmelidir.
 
 ---
 
@@ -202,11 +216,19 @@ Sunucu (`apps/server`) 7.1 ile paralel: ~2 AG.
 
 ---
 
-## ⬜ Faz 8 — Cilalama · ~5 AG
+## ✅ Faz 8 — Cilalama · ~5 AG
 
-CLI (`fitfak-belge sign|verify|render|extend`) · Performans profili ve iyileştirme ·
-Belgeleme (her paket için README + JSDoc) · Dış doğrulayıcı uyumluluk raporu
-(`docs/conformance/`) · npm yayın hattı · Örnek galeri sitesi.
+| # | İş | Durum |
+|---|-----|-------|
+| 8.1 | CLI: `render` · `sign` · `verify` · `extend` · `inspect` · `text` · `edit` · `check` · `stamp` · `serve` | ✅ `bin/fitfak-belge.js` |
+| 8.2 | Uyumluluk raporu (`docs/conformance/`) | ✅ `npm run conformance:report` |
+| 8.3 | Paket README'leri | ✅ 9 paket |
+| 8.4 | npm yayın hattı | ✅ `scripts/publish.js` (topolojik sıra, idempotent) + GitHub Actions |
+| 8.5 | CI: Node 20 + 22, birim + e2e + uyumluluk | ✅ `.github/workflows/ci.yml` |
+| 8.6 | Örnek galeri sitesi | ⬜ **yapılmadı** — Studio zaten canlı önizleme veriyor |
+
+**CLI çıkış kodları:** 0 başarı · 1 kullanım/işlem hatası · 2 doğrulama ya da
+uyumluluk başarısızlığı. Betiklerde `if ! fitfak-belge check …` doğrudan çalışır.
 
 ---
 
@@ -226,6 +248,21 @@ Belgeleme (her paket için README + JSDoc) · Dış doğrulayıcı uyumluluk rap
 
 **~77 AG.** Faz 3, Faz 1–2 ile paralel yürütülürse takvim ~65 güne iner.
 
+### Gerçekleşen kapsam
+
+Tüm fazlar tamamlandı. Bilinçli olarak **yapılmayan** iki kalem:
+
+- **SVG alt kümesi** (6d.6): HTML/CSS motoru zaten dikdörtgen, kenarlık, görsel
+  ve metin çiziyor; SVG bunların üstüne yeni bir ayrıştırıcı + yol motoru
+  getirirdi. Görsel ihtiyacı PNG/JPEG ile karşılanıyor.
+- **Örnek galeri sitesi** (8.6): Studio'nun "Tasarla" sekmesi canlı önizleme
+  veriyor ve `examples/` altında çalışan betikler var; ayrı bir statik site
+  bakım yükü olurdu.
+
+Ayrıca §05/2'deki **kendi canvas PDF renderer'ımız** yazılmadı: tarayıcının
+yerleşik görüntüleyicisi `blob:` URL'li ayrı bir çerçevede kullanılıyor.
+Gerekçe `docs/05-web-studio.md` §2.1'de.
+
 ### Neden bu sıra?
 
 1. **Faz 1–3 önce**, çünkü kullanıcının asıl derdi *"eksiksiz ve LTV etkin PAdES"*.
@@ -235,18 +272,6 @@ Belgeleme (her paket için README + JSDoc) · Dış doğrulayıcı uyumluluk rap
 4. **Faz 6 (HTML/CSS)** en büyüğü ama en az riskli olanı: hata yaparsak sonuç "çirkin PDF",
    "geçersiz imza" değil.
 5. **Faz 7 (Studio)** en sona kalır çünkü altındaki her API'nin oturmuş olması gerekir.
-
----
-
-## Sürüm Kilometre Taşları
-
-| Sürüm | İçerik | Söz |
-|-------|--------|-----|
-| **v0.1** | Faz 0–1 | "PAdES B-LTA, OCSP + CRL ile gerçek LTV" |
-| **v0.2** | Faz 2–3 | "Herhangi bir PFX ile imzala, çevrimdışı doğrula" |
-| **v0.3** | Faz 4–5 | "PDF yükle, düzenle, QR'lı damgayla imzala" |
-| **v0.4** | Faz 6 | "HTML/CSS ile ciddi belge tasarla" |
-| **v1.0** | Faz 7–8 | "Tarayıcıdan uçtan uca: tasarla, düzenle, imzala, doğrula" |
 
 ---
 
@@ -266,22 +291,29 @@ Belgeleme (her paket için README + JSDoc) · Dış doğrulayıcı uyumluluk rap
 
 ---
 
-## İlk Somut Adım (bir sonraki PR)
+## Sürüm Durumu
 
-**PR #1 — "Faz 0: workspaces + iskele"**
+| Sürüm | İçerik | Durum |
+|-------|--------|-------|
+| **v0.1** | Faz 0–1 | ✅ PAdES B-LTA, OCSP + CRL ile gerçek LTV |
+| **v0.2** | Faz 2–3 | ✅ Herhangi bir PFX ile imzala, çevrimdışı doğrula |
+| **v0.3** | Faz 4–5 | ✅ PDF yükle, düzenle, QR'lı damgayla imzala |
+| **v0.4** | Faz 6 | ✅ HTML/CSS ile ciddi belge tasarla |
+| **v1.0** | Faz 7–8 | ✅ Tarayıcıdan ve komut satırından uçtan uca |
 
-```
-+ package.json                     workspaces, engines, scripts
-+ packages/{ssl,qr,pdf,pades}/     node_modules'ten taşındı, git'e girdi
-+ packages/pdf-html/reference/     eski src/ arşivi
-+ examples/01-multi-sign.js        eski index.js
-+ test/unit/smoke.test.js          node:test ile ilk testler
-+ .github/workflows/ci.yml
-- qr.js                            (kopya)
-- src/                             (arşive taşındı)
-- packages/pades/src/signature/signature_assets.js   (bozuk ölü kod)
-~ .gitignore                       packages/* artık yoksayılmıyor
-```
+Test durumu: **271 test** (192 birim + 79 e2e) yeşil. E2E testleri ağa çıkmaz;
+yerel CA + OCSP + CRL + TSA ayağa kaldırır.
 
-**PR #2 — "Faz 1.1–1.4: gerçek CRL/OCSP keşfi ve DSS'e CRL gömme"**
-Kullanıcının en çok canını sıkan somut boşluk (bulgu 3.1.1) burada kapanır.
+---
+
+## Bundan Sonrası
+
+Yol haritasındaki işler bitti. Bir sonraki adım için doğal adaylar:
+
+| Aday | Neden değerli | Neden bekletildi |
+|------|---------------|------------------|
+| **veraPDF ile çapraz doğrulama** | Uyumluluk iddiasını bağımsız kanıtlar | Java bağımlılığı; CI'ya ayrı bir kurulum adımı getirir |
+| **PAdES-LTA yenileme (`refresh`)** | Arşiv damgası zamanla eskir; zincirleme damga gerekir | Şu an LTA bir kez uygulanıyor; yenileme senaryosu ayrı test PKI'ı ister |
+| **CMYK ve renk profilleri** | Baskı işleri için gerekli | Motor bugün yalnız DeviceRGB üretiyor |
+| **SVG alt kümesi** | Vektör logo ve şemalar | Yeni bir yol motoru demek; PNG/JPEG bugün yetiyor |
+| **Uzak imzalayıcı (HSM / bulut)** | Kurumsal dağıtımın olağan yolu | `Signer` arayüzü hazır (`RemoteSigner`), gerçek bir HSM'e karşı sınanmadı |

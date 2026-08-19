@@ -11,6 +11,15 @@ npm test           # birim testleri
 npm run test:e2e   # uçtan uca (tamamen çevrimdışı, yerel PKI ile)
 ```
 
+Komut satırından:
+
+```bash
+npx fitfak-belge render belge.html -o belge.pdf --conformance pdf/a-2b+pdf/ua
+npx fitfak-belge sign belge.pdf --pfx kimlik.p12 --password … --level LTA -o imzali.pdf
+npx fitfak-belge verify imzali.pdf --offline
+npx fitfak-belge check imzali.pdf
+```
+
 ---
 
 ## Ne yapar
@@ -21,6 +30,8 @@ npm run test:e2e   # uçtan uca (tamamen çevrimdışı, yerel PKI ile)
 | **İmzala** | PFX/P12 ile PAdES B-B / B-T / B-LT / B-LTA. Varsayılan akışta **özel anahtar tarayıcıdan çıkmaz**. |
 | **Damgala** | Görünür imza damgası: ad + logo + **Code39** (değişmedi) + **QR** + el yazısı imza. |
 | **Doğrula** | ETSI TS 119 102-1 biçiminde rapor; LTV'li belgeler **ağa çıkmadan** doğrulanır. |
+| **Düzenle** | Yüklenen PDF'te sayfa işlemleri, görsel/metin yerleştirme, form doldurma — **artımlı**, mevcut imzalar geçerli kalır. |
+| **Uy** | PDF/A (arşivlenebilirlik) ve PDF/UA (erişilebilirlik) profilleri; bağımsız denetleyici. |
 
 ---
 
@@ -37,12 +48,16 @@ packages/
 ├── pdf-html/   @fitfak/pdf-html   HTML + CSS → PDF derleyicisi
 ├── pdf-doc/    @fitfak/pdf-doc    mevcut PDF'i okuma/düzenleme (xref stream, ObjStm)
 ├── paper/      @fitfak/paper      baskıya öncelikli CSS tasarım sistemi
-└── verify/     @fitfak/verify     imza doğrulama + ETSI raporu
+├── verify/     @fitfak/verify     imza doğrulama + ETSI raporu
+└── conformance/ @fitfak/conformance  PDF/A + PDF/UA denetimi
 
 apps/
 ├── server/     node:http API sunucusu
 ├── studio/     vanilla JS arayüz (framework/bundler yok)
 └── scanner/    QR tarayıcı (ayrı ürün)
+
+bin/
+└── fitfak-belge.js   komut satırı arayüzü
 ```
 
 Paketler npm **workspaces** ile bağlıdır: `require('@fitfak/pades')` doğrudan
@@ -153,6 +168,32 @@ imzalara dokunulmadan, yeni bir artımlı revizyon olarak.
 
 ---
 
+## Uyumluluk profilleri
+
+```js
+const { pdf, conformance } = render({ …, conformance: 'pdf/a-2b+pdf/ua' });
+```
+
+| Profil | Ne ekler |
+|--------|----------|
+| **PDF/A-1b / -2b / -3b** | XMP `pdfaid` iddiası, gömülü sRGB ICC profili + `/OutputIntents`, `/ID`, açıklamalarda Print bayrağı |
+| **PDF/UA-1** | Yapı ağacı (`/StructTreeRoot` + `/ParentTree`), işaretli içerik, `/Lang`, `/DisplayDocTitle`, görsellerde `/Alt`, bağlantılarda `/OBJR` |
+
+Etiketleme **yalnız işaret ekler**: çizim işlemleri ve yerleşim bire bir aynı
+kalır (test bunu ayrıca doğrular).
+
+Bağımsız denetim:
+
+```bash
+fitfak-belge check belge.pdf          # uyumsuzlukta çıkış kodu 2
+```
+
+`@fitfak/conformance` 10 PDF/A maddesini ve 9 PDF/UA kuralını sınar.
+**veraPDF'in yerini tutmaz**: uyumu kanıtlamaz, uyumsuzluğun en sık görülen
+biçimlerini yakalar ve hangi maddeyi denetlediğini adıyla söyler.
+
+---
+
 ## Test
 
 Tüm testler **çevrimdışı** çalışır: yerel CA + OCSP responder + CRL dağıtım
@@ -161,15 +202,19 @@ sertifikalara **gerçek AIA/CDP uzantıları** gömülür — böylece otomatik 
 kodu da gerçekten sınanır.
 
 ```bash
-npm test          # 80 birim testi
-npm run test:e2e  # 44 uçtan uca test
-npm run fixtures  # OpenSSL ile 9 farklı PFX varyantı üretir
+npm test                    # 192 birim testi
+npm run test:e2e            # 79 uçtan uca test
+npm run test:all            # ikisi birden (271)
+npm run fixtures            # PFX ve PDF test dosyalarını üretir
+npm run conformance:report  # docs/conformance/RAPOR.md
 ```
 
 Kapsam: PAdES seviyeleri · yalnız-CRL veren CA · çoklu imza · iptal · seviye
 düşüşü raporlama · artımlı güncelleme bütünlüğü · 6 PFX şeması · RFC 2268 RC2
-vektörleri · damga geriye uyumu (piksel-piksel) · HTML/CSS motoru · doğrulama
-(kurcalama, POE, güvenilmeyen kök) · sunucu API'si · iki fazlı imzalama.
+vektörleri · damga geriye uyumu (piksel-piksel) · HTML/CSS motoru · xref
+akışı / nesne akışı / şifreli PDF okuma · form doldurma ve düzleştirme · metin
+çıkarımı · PDF/A ve PDF/UA denetimi · doğrulama (kurcalama, POE, güvenilmeyen
+kök) · sunucu API'si · iki fazlı imzalama · CLI.
 
 ---
 
@@ -183,11 +228,14 @@ vektörleri · damga geriye uyumu (piksel-piksel) · HTML/CSS motoru · doğrula
 | [docs/04-pdf-motoru.md](docs/04-pdf-motoru.md) | HTML/CSS derleyicisi, `@fitfak/paper` |
 | [docs/05-web-studio.md](docs/05-web-studio.md) | Arayüz tasarımı ve API sözleşmesi |
 | [docs/06-yol-haritasi.md](docs/06-yol-haritasi.md) | Fazlar, kabul kriterleri, risk kaydı |
+| [docs/07-cli.md](docs/07-cli.md) | Komut satırı arayüzü — her komut, seçenek ve çıkış kodu |
 
 Paket README'leri: [pkcs12](packages/pkcs12/README.md) ·
 [stamp](packages/stamp/README.md) · [pdf-html](packages/pdf-html/README.md) ·
 [pdf-doc](packages/pdf-doc/README.md) · [paper](packages/paper/README.md) ·
-[verify](packages/verify/README.md)
+[verify](packages/verify/README.md) · [conformance](packages/conformance/README.md)
+
+Uyumluluk raporu: [docs/conformance/RAPOR.md](docs/conformance/RAPOR.md)
 
 ---
 

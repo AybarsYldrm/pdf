@@ -16,6 +16,9 @@
     "packages/*",
     "apps/*"
   ],
+  "bin": {
+    "fitfak-belge": "bin/fitfak-belge.js"
+  },
   "scripts": {
     "test": "node --test 'test/unit/**/*.test.js'",
     "test:e2e": "node --test 'test/e2e/**/*.test.js'",
@@ -24,6 +27,8 @@
     "fixtures:pkcs12": "bash test/fixtures/pkcs12/generate.sh",
     "fixtures:pdf": "node test/fixtures/pdf/generate.js",
     "start": "node apps/server/server.js",
+    "cli": "node bin/fitfak-belge.js",
+    "conformance:report": "node scripts/conformance-report.js",
     "example": "node examples/01-multi-sign.js"
   }
 }

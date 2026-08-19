@@ -69,11 +69,21 @@
         <textarea id="htmlSource" class="input input--code" spellcheck="false"></textarea>
       </label>
 
+      <label class="field">
+        <span class="field__label">Uyumluluk profili</span>
+        <select id="conformance" class="input">
+          <option value="">Yok (standart PDF)</option>
+        </select>
+      </label>
+
       <div class="pane__actions">
         <button class="btn btn--primary" id="btnRender" type="button">PDF üret</button>
         <button class="btn" id="btnDownload" type="button" disabled>İndir</button>
+        <button class="btn" id="btnConformance" type="button" disabled>Uyumluluğu denetle</button>
       </div>
       <p class="hint" id="renderHint">Önizleme, PDF motoruyla <strong>aynı CSS</strong> ile çizilir.</p>
+      <p class="hint">PDF/A arşivlenebilirlik (gömülü font + ICC profili),
+        PDF/UA erişilebilirlik (etiketli yapı ağacı) demektir.</p>
     </section>
 
     <!-- Düzenle -->
@@ -238,6 +248,7 @@
       </label>
       <div class="pane__actions">
         <button class="btn btn--primary" id="btnVerify" type="button">Doğrula</button>
+        <button class="btn" id="btnVerifyConformance" type="button">Uyumluluk</button>
       </div>
       <p class="hint">LTV verisi gömülü belgeler <strong>çevrimdışı</strong> doğrulanabilir.</p>
     </section>
@@ -266,6 +277,11 @@
     <h2 class="pane__title">İmza paneli</h2>
     <div id="signaturePanel" class="sigpanel">
       <p class="empty">Henüz doğrulanmış imza yok.</p>
+    </div>
+
+    <h2 class="pane__title">Uyumluluk</h2>
+    <div id="conformancePanel" class="confpanel">
+      <p class="empty">Henüz denetim yapılmadı.</p>
     </div>
   </aside>
 </main>

@@ -202,7 +202,8 @@ async function doRender() {
       html: withSubstitutions($('#htmlSource').value),
       theme: $('#themeSelect').value,
       page: { size: $('#pageSize').value, margin: '20mm 18mm' },
-      metadata: { title: $('#docTitle').value, lang: 'tr-TR' }
+      metadata: { title: $('#docTitle').value, lang: 'tr-TR' },
+      conformance: $('#conformance').value || null
     });
 
     state.pdf = fromBase64(res.pdf);
@@ -211,9 +212,11 @@ async function doRender() {
 
     refreshSlotSelect();
     $('#btnDownload').disabled = false;
+    $('#btnConformance').disabled = false;
     $('#btnSign').disabled = !state.browserKey && !$('#serverSide').checked;
 
     for (const w of res.warnings || []) toast(w.message, 'warn', 'Render uyarısı');
+    if (res.conformance) await checkConformance({ quiet: true });
 
     status(`Hazır · ${res.manifest.pageCount} sayfa · ${res.manifest.signatureSlots.length} imza yuvası`);
     toast(`PDF üretildi (${res.manifest.pageCount} sayfa).`, 'ok');
@@ -494,6 +497,80 @@ async function loadVerifyFile() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Uyumluluk                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Üzerinde çalışılan belgeyi PDF/A ve PDF/UA açısından denetler.
+ *
+ * Rapor, üretim tarafından BAĞIMSIZ okunur: "profili istedik" ile "profil
+ * gerçekten yazılmış" ayrı şeylerdir ve kullanıcı ikincisini görmelidir.
+ */
+async function checkConformance({ quiet = false } = {}) {
+  if (!state.pdf) return;
+  const panel = $('#conformancePanel');
+
+  try {
+    const report = await api.conformance(state.pdf);
+    renderConformance(panel, report);
+    if (!quiet) {
+      toast(report.conforms ? 'Belge denetlenen kurallara uyuyor.'
+                            : `${report.summary.errors} uyumluluk hatası bulundu.`,
+        report.conforms ? 'ok' : 'warn', 'Uyumluluk');
+    }
+  } catch (err) {
+    handleError(err, 'Uyumluluk denetimi başarısız');
+  }
+}
+
+function renderConformance(panel, report) {
+  clear(panel);
+
+  if (!report.profiles.length || (!report.pdfA && !report.pdfUA)) {
+    panel.appendChild(el('p', { class: 'empty', text: 'Belge bir uyumluluk profili iddia etmiyor.' }));
+    return;
+  }
+
+  panel.appendChild(el('div', {
+    class: `conf__verdict ${report.conforms ? 'is-ok' : 'is-bad'}`
+  }, [
+    el('strong', { text: report.conforms ? 'UYUMLU' : 'UYUMSUZ' }),
+    el('span', { text: ` · ${report.profiles.join(', ')}` })
+  ]));
+
+  const section = (title, block, keyName) => {
+    if (!block) return;
+    panel.appendChild(el('h3', { class: 'conf__title', text: title }));
+
+    const list = el('ul', { class: 'conf__list' });
+    for (const item of block.errors) {
+      list.appendChild(el('li', { class: 'conf__item conf__item--error' },
+        [el('code', { text: item[keyName] || '—' }), ' ', item.message]));
+    }
+    for (const item of block.warnings) {
+      list.appendChild(el('li', { class: 'conf__item conf__item--warn' },
+        [el('code', { text: item[keyName] || '—' }), ' ', item.message]));
+    }
+    if (!list.children.length) {
+      list.appendChild(el('li', { class: 'conf__item conf__item--ok', text: 'İhlal bulunamadı.' }));
+    }
+    panel.appendChild(list);
+  };
+
+  section(report.pdfA ? report.pdfA.profile : '', report.pdfA, 'clause');
+  section('PDF/UA-1', report.pdfUA, 'rule');
+
+  if (report.pdfUA && report.pdfUA.structure.elements) {
+    const s = report.pdfUA.structure;
+    panel.appendChild(el('p', {
+      class: 'hint',
+      text: `Yapı: ${s.elements} eleman · ${s.figures} görsel · ` +
+            `${s.links} bağlantı · ${s.tables} tablo`
+    }));
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Başlangıç                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -546,6 +623,9 @@ async function init() {
     state.capabilities = await api.health();
     setOptions($('#themeSelect'), state.capabilities.themes, 'kurumsal');
     setOptions($('#stampTemplate'), state.capabilities.stampTemplates, 'dual');
+    for (const profile of state.capabilities.conformanceProfiles || []) {
+      $('#conformance').appendChild(el('option', { value: profile, text: profile.toUpperCase() }));
+    }
     if (!state.capabilities.serverSidePfx) {
       $('#serverSide').disabled = true;
       $('#serverSide').closest('.check').classList.add('is-hidden');
@@ -580,6 +660,8 @@ async function init() {
   $('#btnPfxOpen').addEventListener('click', openPfx);
   $('#btnSign').addEventListener('click', doSign);
   $('#btnVerify').addEventListener('click', loadVerifyFile);
+  $('#btnConformance').addEventListener('click', () => checkConformance());
+  $('#btnVerifyConformance').addEventListener('click', () => checkConformance());
   $('#identitySelect').addEventListener('change', (e) => {
     showIdentityMeta(Number(e.target.value));
     refreshStampPreview();

@@ -82,3 +82,64 @@ const { pdf, manifest } = render({
   metadata: { title: 'Belge', author: 'FITFAK', lang: 'tr-TR' }
 });
 ```
+
+## Uyumluluk profilleri (PDF/A, PDF/UA)
+
+```js
+const { pdf, conformance, warnings } = render({
+  html, css, fonts,
+  metadata: { title: 'Sözleşme', author: 'Aybars Yıldırım', lang: 'tr-TR' },
+  conformance: 'pdf/a-2b+pdf/ua'
+});
+
+conformance;   // { pdfA: '2b', pdfUA: true, tagged: true }
+```
+
+Kabul edilen biçimler: `'pdf/a-1b'` · `'pdf/a-2b'` · `'pdf/a-3b'` · `'pdf/ua'` ·
+`'pdf/a-2b+pdf/ua'` ya da `{ pdfA: '2b', pdfUA: true }`.
+
+| Profil | Yazılan yapı |
+|--------|--------------|
+| **PDF/A** | XMP `pdfaid` iddiası (UTF-8, sıkıştırılmamış), gömülü sRGB ICC profili + `/OutputIntents`, trailer `/ID`, açıklamalarda `/F 4` |
+| **PDF/UA** | `/StructTreeRoot` + `/ParentTree`, `/MarkInfo << /Marked true >>`, işaretli içerik (`/P << /MCID n >> BDC … EMC`), `/Lang`, `/DisplayDocTitle`, bağlantılarda `/Contents` + `/OBJR` |
+
+### Etiketleme nasıl çalışır
+
+Yerleşim motoru HTML'i zaten anlıyor: hangi kutu başlık, hangisi tablo hücresi.
+Bu bilgi çizim sırasında kaybolmasın diye paralel bir **yapı ağacı** kurulur
+(`src/layout/struct.js`) ve içerik akışındaki işaretli parçalara bağlanır
+(`src/pdf/tagged.js`).
+
+| HTML | PDF yapı türü |
+|------|---------------|
+| `h1`–`h6` | `H1`–`H6` |
+| `p` · `div` · `span` | `P` · `Div` · `Span` |
+| `ul` / `ol` → `li` | `L` → `LI` (`Lbl` + `LBody`) |
+| `table` · `thead` · `tr` · `th` · `td` | `Table` · `THead` · `TR` · `TH` (`/Scope`) · `TD` |
+| `img` | `Figure` — `alt` niteliği `/Alt` olur |
+| `a` | `Link` + açıklamaya `/OBJR` bağı |
+| arka plan, kenarlık, tekrarlanan tablo başlığı | `/Artifact` (ekran okuyucu atlar) |
+
+`role="presentation"`, `role="none"` ve `aria-hidden="true"` süsleme sayılır;
+`aria-label` alternatif metin olarak kullanılır.
+
+**Etiketleme yalnız işaret ekler.** Çizim işlemleri ve yerleşim bire bir aynı
+kalır — testler bunu ayrıca doğrular:
+
+```js
+assert.deepStrictEqual(tagged, plain);   // BDC/BMC/EMC hariç tüm operatörler
+```
+
+### Doğrulama
+
+Motor, profili yazar; **yazdığını denetlemez**. Bağımsız denetim ayrı bir
+pakettedir:
+
+```bash
+fitfak-belge check belge.pdf
+```
+
+Bkz. [`@fitfak/conformance`](../conformance/README.md).
+
+PDF/UA için `metadata.title` **zorunludur**; verilmezse `warnings[]` içinde
+uyarı çıkar (belge yine üretilir ama denetimi geçmez).

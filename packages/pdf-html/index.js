@@ -18,6 +18,7 @@ const { StyleResolver } = require('./src/css/cascade');
 const { LayoutEngine } = require('./src/layout/engine');
 const { FlowLayout } = require('./src/layout/flow');
 const { PdfEmitter, embedFont } = require('./src/pdf/emitter');
+const { assignMcids, writeStructTree } = require('./src/pdf/tagged');
 const { FontManager } = require('./src/font/manager');
 const { toPt, toColor } = require('./src/css/values');
 
@@ -131,16 +132,73 @@ function render(o = {}) {
   const flow = new FlowLayout(engine);
   const { pages } = flow.run(boxTree);
 
-  /* 7. PDF üretimi ------------------------------------------------ */
+  /* 7. Uyumluluk profili ------------------------------------------ */
+  const conformance = resolveConformance(o.conformance, warnings, o.metadata || {});
+
+  /* 8. PDF üretimi ------------------------------------------------ */
   const result = emitPdf({
-    pages, page, fonts, engine, metadata: { title: docTitle, ...(o.metadata || {}) },
+    pages, page, fonts, engine, flow, conformance,
+    metadata: { title: docTitle, ...(o.metadata || {}) },
     compress: o.compress !== false, loadImage
   });
 
-  /* 8. Manifest --------------------------------------------------- */
+  /* 9. Manifest --------------------------------------------------- */
   const manifest = buildManifest({ pages, page, engine });
 
-  return { pdf: result, manifest, warnings };
+  return { pdf: result, manifest, warnings, conformance };
+}
+
+/* ------------------------------------------------------------------ */
+/* Uyumluluk profili                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `conformance` seçeneğini normalleştirir.
+ *
+ *   'pdf/a-2b'          → PDF/A-2b
+ *   'pdf/ua'            → etiketli PDF + PDF/UA iddiası
+ *   'pdf/a-2b+pdf/ua'   → ikisi birden (PDF/A-2a benzeri erişilebilir arşiv)
+ *   { pdfA:'2b', pdfUA:true, tagged:true }
+ *
+ * PDF/UA iddia edildiğinde etiketleme ZORUNLU açılır: etiketsiz bir belgede
+ * `pdfuaid:part 1` yazmak yanlış beyandır.
+ */
+function resolveConformance(value, warnings, metadata) {
+  if (!value) return null;
+
+  let pdfA = null;
+  let pdfUA = false;
+
+  if (typeof value === 'string') {
+    const text = value.toLowerCase();
+    const m = /pdf\/a-?(\d)([ab])?/.exec(text);
+    if (m) pdfA = `${m[1]}${m[2] || 'b'}`;
+    if (/pdf\/ua/.test(text)) pdfUA = true;
+    if (!pdfA && !pdfUA) {
+      warnings.push({ type: 'conformance', message: `Bilinmeyen uyumluluk profili: ${value}` });
+      return null;
+    }
+  } else if (typeof value === 'object') {
+    pdfA = value.pdfA ? String(value.pdfA).replace(/^pdf\/a-?/i, '') : null;
+    pdfUA = !!value.pdfUA;
+  }
+
+  if (pdfA && !['1b', '2b', '3b', '2a', '3a'].includes(pdfA)) {
+    warnings.push({ type: 'conformance', message: `Desteklenmeyen PDF/A düzeyi: ${pdfA}; 2b kullanılıyor` });
+    pdfA = '2b';
+  }
+
+  // 'a' düzeyi (erişilebilir arşiv) etiketleme gerektirir
+  const tagged = pdfUA || (pdfA ? pdfA.endsWith('a') : false);
+
+  if ((pdfUA || tagged) && !metadata.title) {
+    warnings.push({
+      type: 'conformance',
+      message: 'PDF/UA belge başlığı (metadata.title) ister; başlıksız belge doğrulamayı geçmez.'
+    });
+  }
+
+  return { pdfA, pdfUA, tagged };
 }
 
 /* ------------------------------------------------------------------ */
@@ -219,8 +277,10 @@ function resolveMargin(value) {
 /* PDF çıktısı                                                         */
 /* ------------------------------------------------------------------ */
 
-function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage }) {
+function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage, flow, conformance }) {
   const emitter = new PdfEmitter({ compress });
+  const tagged = !!(conformance && conformance.tagged && flow);
+  if (tagged) assignMcids(pages);
 
   // Kullanılan kod noktalarını yüz başına topla
   const usedByFace = new Map();
@@ -254,8 +314,13 @@ function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage }) 
   const marginLeft = page.margin.left;
   const marginTop = page.margin.top;
 
+  // Açıklamalar için /StructParent anahtarları sayfa anahtarlarından SONRA gelir
+  const annotParents = new Map();
+  let nextAnnotKey = pages.length;
+
   for (const p of pages) {
-    const { content, usedFonts, usedImages } = buildContentStream(p, page, marginLeft, marginTop, imageRefs);
+    const { content, usedFonts, usedImages } =
+      buildContentStream(p, page, marginLeft, marginTop, imageRefs, tagged);
     const contentId = emitter.addStream({}, content);
 
     const fontDict = [...usedFonts].map((id) => `/${id} ${fontRefs.get(id)} 0 R`).join(' ');
@@ -274,23 +339,43 @@ function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage }) 
       const r = link.rect;
       const x1 = marginLeft + r.x;
       const y1 = page.height - marginTop - r.y - r.height;
-      const annotId = emitter.add({ dict: {
+
+      const dict = {
         Type: '/Annot', Subtype: '/Link',
         Rect: `[${fmt(x1)} ${fmt(y1)} ${fmt(x1 + r.width)} ${fmt(y1 + r.height)}]`,
         Border: '[0 0 0]',
+        // PDF/A: her açıklama /F içinde Print(4) taşımalı, Hidden olmamalı
+        F: 4,
         A: `<< /Type /Action /S /URI /URI ${PdfEmitter.literalString(link.uri)} >>`
-      } });
+      };
+
+      // PDF/UA: bağlantının erişilebilir bir açıklaması olmalı
+      if (tagged) {
+        dict.Contents = PdfEmitter.textString(link.uri);
+        dict.StructParent = nextAnnotKey;
+      }
+
+      const annotId = emitter.add({ dict });
       annots.push(`${annotId} 0 R`);
+
+      if (tagged && link.structNode) {
+        link.structNode.k.push({ objr: annotId, page: p.index });
+        annotParents.set(link.structNode, nextAnnotKey);
+      }
+      if (tagged) nextAnnotKey++;
     }
 
-    const pageId = emitter.add({ dict: {
+    const pageDict = {
       Type: '/Page',
       Parent: `${pagesRootId} 0 R`,
       MediaBox: `[0 0 ${fmt(page.width)} ${fmt(page.height)}]`,
       Resources: PdfEmitter.dictToString(resources),
       Contents: `${contentId} 0 R`,
       Annots: annots.length ? `[${annots.join(' ')}]` : undefined
-    } });
+    };
+    if (tagged) pageDict.StructParents = p.index;
+
+    const pageId = emitter.add({ dict: pageDict });
     pageIds.push(pageId);
   }
 
@@ -322,10 +407,12 @@ function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage }) 
   }
   const infoId = emitter.add({ dict: infoDict });
 
+  // XMP UTF-8'dir. Buffer olarak veriyoruz: emitter dizgileri latin1 yazar ve
+  // Türkçe karakterler orada bozulur (dc:title ile /Info tutarsız kalırdı).
   const xmpId = emitter.addStream(
     { Type: '/Metadata', Subtype: '/XML' },
-    buildXmp(metadata),
-    { compress: false }
+    Buffer.from(buildXmp(metadata, conformance), 'utf8'),
+    { compress: false }              // PDF/A: XMP akışı sıkıştırılmamalı
   );
 
   const catalogDict = {
@@ -339,13 +426,44 @@ function emitPdf({ pages, page, fonts, engine, metadata, compress, loadImage }) 
     catalogDict.Outlines = `${outlinesId} 0 R`;
     catalogDict.PageMode = '/UseOutlines';
   }
+
+  // Etiketli PDF: yapı ağacı + "işaretlenmiştir" bayrağı
+  if (tagged) {
+    const structTreeRootId = writeStructTree(
+      emitter, flow.struct.prune(), pageIds, annotParents);
+    catalogDict.StructTreeRoot = `${structTreeRootId} 0 R`;
+    catalogDict.MarkInfo = '<< /Marked true >>';
+  }
+
+  // PDF/A: cihazdan bağımsız renk için çıktı amacı (output intent) zorunlu
+  if (conformance && conformance.pdfA) {
+    catalogDict.OutputIntents = `[${writeOutputIntent(emitter)}]`;
+  }
+
   const catalogId = emitter.add({ dict: catalogDict });
 
   return emitter.build({ rootObj: catalogId, infoObj: infoId });
 }
 
+/** sRGB çıktı amacı — ICC profili gömülür (PDF/A zorunluluğu). */
+function writeOutputIntent(emitter) {
+  const { sRGBProfile } = require('@fitfak/conformance');
+  const icc = sRGBProfile();
+  const iccId = emitter.addStream({ N: 3 }, icc);
+
+  const intentId = emitter.add({ dict: {
+    Type: '/OutputIntent',
+    S: '/GTS_PDFA1',
+    OutputConditionIdentifier: PdfEmitter.literalString('sRGB IEC61966-2.1'),
+    Info: PdfEmitter.literalString('sRGB IEC61966-2.1'),
+    RegistryName: PdfEmitter.literalString('http://www.color.org'),
+    DestOutputProfile: `${iccId} 0 R`
+  } });
+  return `${intentId} 0 R`;
+}
+
 /** Bir sayfanın içerik akışını üretir. */
-function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs) {
+function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs, tagged = false) {
   const parts = [];
   const usedFonts = new Set();
   const usedImages = new Set();
@@ -361,18 +479,31 @@ function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs) {
     parts.push(`${fmt(color[0] / 255)} ${fmt(color[1] / 255)} ${fmt(color[2] / 255)} rg`);
   };
 
+  // İşaretli içerik: etiketli PDF'te her çizim ya bir yapı elemanına aittir
+  // (`/Rol <</MCID n>> BDC`) ya da yapaydır (`/Artifact BMC`). İkisi de değilse
+  // PDF/UA doğrulayıcısı "etiketlenmemiş içerik" der.
+  const openMark = (item) => {
+    if (!tagged) return;
+    if (item.mcid === undefined) { parts.push('/Artifact BMC'); return; }
+    const role = item.struct && item.struct.role ? item.struct.role : 'P';
+    parts.push(`/${role} << /MCID ${item.mcid} >> BDC`);
+  };
+  const closeMark = () => { if (tagged) parts.push('EMC'); };
+
   for (const item of pageData.items) {
     const alpha = item.opacity !== undefined && item.opacity !== 1 ? item.opacity : 1;
 
     if (item.type === 'rect') {
       const x = marginLeft + item.x;
       const y = toPdfY(item.y + item.height);
+      openMark(item);
       parts.push('q');
       setFill(item.fill);
       currentFill = null;   // q/Q renk durumunu geri alır
       parts.push(`${fmt(item.fill[0] / 255)} ${fmt(item.fill[1] / 255)} ${fmt(item.fill[2] / 255)} rg`);
       parts.push(`${fmt(x)} ${fmt(y)} ${fmt(item.width)} ${fmt(item.height)} re f`);
       parts.push('Q');
+      closeMark();
       continue;
     }
 
@@ -382,10 +513,12 @@ function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs) {
       const x = marginLeft + item.x;
       const y = toPdfY(item.y + item.height);
       usedImages.add(ref);
+      openMark(item);
       parts.push('q');
       parts.push(`${fmt(item.width)} 0 0 ${fmt(item.height)} ${fmt(x)} ${fmt(y)} cm`);
       parts.push(`/Im${ref} Do`);
       parts.push('Q');
+      closeMark();
       continue;
     }
 
@@ -395,6 +528,7 @@ function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs) {
       usedFonts.add(item.face.id);
 
       const hex = encodeGlyphs(item.text, item.face.parser);
+      openMark(item);
       parts.push('BT');
       parts.push(`${fmt(item.color[0] / 255)} ${fmt(item.color[1] / 255)} ${fmt(item.color[2] / 255)} rg`);
       currentFill = null;
@@ -404,6 +538,7 @@ function buildContentStream(pageData, page, marginLeft, marginTop, imageRefs) {
       parts.push(`<${hex}> Tj`);
       if (item.letterSpacing) parts.push('0 Tc');
       parts.push('ET');
+      closeMark();
       continue;
     }
   }
@@ -498,14 +633,32 @@ function buildOutline(emitter, outline, pageIds, page) {
   return rootId;
 }
 
-function buildXmp(metadata) {
+function buildXmp(metadata, conformance = null) {
   const esc = (s) => String(s || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+
+  // Uyumluluk kimlikleri: doğrulayıcılar belgenin hangi profili İDDİA ettiğini
+  // buradan okur. Yanlış iddia etmek, iddia etmemekten kötüdür.
+  let claims = '';
+  if (conformance && conformance.pdfA) {
+    // '2b' / '2-b' / 'pdf/a-2b' → part=2, level=B
+    const m = /(\d)\s*-?\s*([ab])?/i.exec(String(conformance.pdfA));
+    const part = m ? m[1] : '2';
+    const level = (m && m[2] ? m[2] : 'b').toUpperCase();
+    claims += `\n   <pdfaid:part>${esc(part)}</pdfaid:part>` +
+              `\n   <pdfaid:conformance>${esc(level)}</pdfaid:conformance>`;
+  }
+  if (conformance && conformance.pdfUA) {
+    claims += `\n   <pdfuaid:part>1</pdfuaid:part>`;
+  }
+
   return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
     xmlns:dc="http://purl.org/dc/elements/1.1/"
     xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
+    xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"
     xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
    <dc:title><rdf:Alt><rdf:li xml:lang="x-default">${esc(metadata.title)}</rdf:li></rdf:Alt></dc:title>
    <dc:creator><rdf:Seq><rdf:li>${esc(metadata.author)}</rdf:li></rdf:Seq></dc:creator>
@@ -513,7 +666,7 @@ function buildXmp(metadata) {
    <dc:language><rdf:Bag><rdf:li>${esc(metadata.lang || 'tr-TR')}</rdf:li></rdf:Bag></dc:language>
    <xmp:CreatorTool>fitfak-belge / @fitfak/pdf-html</xmp:CreatorTool>
    <xmp:CreateDate>${new Date().toISOString()}</xmp:CreateDate>
-   <pdf:Producer>fitfak-belge</pdf:Producer>
+   <pdf:Producer>fitfak-belge</pdf:Producer>${claims}
   </rdf:Description>
  </rdf:RDF>
 </x:xmpmeta>

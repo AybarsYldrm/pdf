@@ -249,7 +249,9 @@ class LayoutEngine {
 
       if (child.tag === 'img') {
         const img = this.tryLoadImage(child);
-        if (img) out.push({ type: 'image', ...img, style: child.style, href });
+        // `alt` etiketli PDF'te Figure'ün /Alt değeri olur; taşımazsak
+        // PDF/UA denetimi "alternatif metni yok" der.
+        if (img) out.push({ type: 'image', ...img, style: child.style, href, box: child });
         continue;
       }
 

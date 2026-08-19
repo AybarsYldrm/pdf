@@ -9,6 +9,7 @@
 
 const { toPt, toColor } = require('../css/values');
 const { isBlockDisplay, applyTextTransform } = require('./engine');
+const { StructBuilder, StructNode, roleFor, attrsFor } = require('./struct');
 
 const LIST_MARKERS = {
   disc: '•', circle: '◦', square: '▪', none: ''
@@ -26,6 +27,11 @@ class FlowLayout {
     this.pendingBreak = false;
     this.repeatHeaders = [];   // sayfa başına tekrar edecek tablo başlıkları
     this.counters = { page: 0 };
+
+    /** Etiketli PDF yapı ağacı — çizim listesiyle paralel kurulur. */
+    this.struct = new StructBuilder();
+    /** >0 iken üretilen her öğe yapay (artifact) sayılır. */
+    this._artifactDepth = 0;
   }
 
   get contentWidth() {
@@ -48,7 +54,8 @@ class FlowLayout {
 
     // Tekrar eden tablo başlıklarını yeni sayfaya bas
     for (const header of this.repeatHeaders) {
-      const h = this.emitRows(header.rows, header.x, this.cursorY, header.columns, header.style);
+      const h = this.asArtifact(() => this.emitRows(header.rows, header.x, this.cursorY,
+        header.columns, header.style, true));
       this.cursorY += h;
     }
     return this.current;
@@ -85,6 +92,7 @@ class FlowLayout {
     const saved = {
       pages: this.pages, current: this.current, cursorY: this.cursorY,
       headers: this.repeatHeaders.slice(), noBreak: this._noBreak,
+      struct: this.struct.mark(),
       slots: this.engine.slots.length,
       links: this.engine.links.length,
       outline: this.engine.outline.length
@@ -104,6 +112,7 @@ class FlowLayout {
       this.cursorY = saved.cursorY;
       this.repeatHeaders = saved.headers;
       this._noBreak = saved.noBreak;
+      this.struct.restore(saved.struct);
       this.engine.slots.length = saved.slots;
       this.engine.links.length = saved.links;
       this.engine.outline.length = saved.outline;
@@ -116,10 +125,48 @@ class FlowLayout {
     return this.contentHeight - this.cursorY;
   }
 
-  /** Çizim öğesi ekler (koordinatlar içerik alanına göre). */
+  /**
+   * Çizim öğesi ekler (koordinatlar içerik alanına göre).
+   *
+   * `artifact: true` verilmeyen her öğe, o an açık olan yapı düğümüne
+   * bağlanır. MCID numaraları burada DEĞİL, içerik akışı yazılırken atanır:
+   * dekorasyonlar listeye sonradan araya sokulduğu için sıra ancak o zaman
+   * kesinleşir.
+   */
   emit(item) {
     this.ensurePage();
+    if (this._artifactDepth > 0) item.artifact = true;
+    if (!item.artifact) item.struct = this.struct.top;
     this.current.items.push(item);
+  }
+
+  /** Yapay (dekoratif) öğe: ekran okuyucu görmez. */
+  emitArtifact(item) {
+    item.artifact = true;
+    this.emit(item);
+  }
+
+  /**
+   * Satır içi bir görseli `Figure` yapı elemanına sarar.
+   *
+   * Blok bağlamındaki `<img>` zaten `layoutBlockInner` üzerinden Figure açar;
+   * satır içi olan bu yoldan geçmez ve sarılmazsa paragrafın parçası sayılırdı
+   * — o zaman /Alt hiç istenmez ve erişilebilirlik sessizce kaybolur.
+   */
+  inFigure(item, fn) {
+    const attrs = item.box ? attrsFor(item.box) : {};
+    if (attrs.presentational) {
+      // role="presentation" → süsleme; ekran okuyucu atlar
+      return this.asArtifact(fn);
+    }
+    this.struct.push('Figure', attrs);
+    try { return fn(); } finally { this.struct.pop(); }
+  }
+
+  /** Verilen iş boyunca üretilen her şeyi yapay sayar. */
+  asArtifact(fn) {
+    this._artifactDepth++;
+    try { return fn(); } finally { this._artifactDepth--; }
   }
 
   /* ---------------------------------------------------------------- */
@@ -213,8 +260,41 @@ class FlowLayout {
     }
   }
 
-  /** layoutBlock'un gövdesi — ölçüm turunda da çağrılabilsin diye ayrı. */
+  /**
+   * layoutBlock'un gövdesi — ölçüm turunda da çağrılabilsin diye ayrı.
+   *
+   * Kutu bir anlam taşıyorsa (başlık, paragraf, tablo hücresi…) yapı ağacında
+   * bir düğüm açılır; içindeki her çizim öğesi o düğüme bağlanır.
+   */
   layoutBlockInner(box, containerX, containerWidth) {
+    const opened = this.openStruct(box);
+    try {
+      this.layoutBlockBody(box, containerX, containerWidth);
+    } finally {
+      for (let i = 0; i < opened; i++) this.struct.pop();
+    }
+  }
+
+  /**
+   * Kutuya karşılık gelen yapı düğümlerini açar; açılan düğüm sayısını döndürür.
+   * `<li>` iki düğüm açar: `LI` ve içeriği taşıyan `LBody`.
+   */
+  openStruct(box) {
+    const attrs = attrsFor(box);
+    if (attrs.presentational) return 0;      // role="presentation" → yapay
+
+    const role = roleFor(box);
+    if (!role) return 0;
+
+    this.struct.push(role, attrs);
+    if (role === 'LI') {
+      this.struct.push('LBody', {});
+      return 2;
+    }
+    return 1;
+  }
+
+  layoutBlockBody(box, containerX, containerWidth) {
     const style = box.style;
     const e = this.engine.edges(style, containerWidth);
 
@@ -237,9 +317,24 @@ class FlowLayout {
     const markPage = this.current.index;
     const markIndex = this.current.items.length;
 
-    // Liste işareti
+    // Liste işareti — PDF/UA'da LI, Lbl + LBody taşır. İşaret LBody'nin değil,
+    // LI'nin doğrudan çocuğudur ve okuma sırasında LBody'den ÖNCE gelir.
     if (style.display === 'list-item') {
-      this.emitListMarker(box, boxX, innerWidth, style);
+      const stack = this.struct.stack;
+      const li = stack[stack.length - 1].role === 'LBody' ? stack[stack.length - 2] : null;
+
+      if (li) {
+        const label = new StructNode('Lbl');
+        li.k.unshift(label);
+        stack.push(label);
+        try {
+          this.emitListMarker(box, boxX, innerWidth, style);
+        } finally {
+          stack.pop();
+        }
+      } else {
+        this.emitListMarker(box, boxX, innerWidth, style);
+      }
     }
 
     let contentHeight = 0;
@@ -332,7 +427,7 @@ class FlowLayout {
     if (bg && bg[3] > 0) {
       decorations.push({
         type: 'rect', x, y, width, height: drawHeight, fill: bg, radius,
-        page: targetPage.index, opacity: style.opacity
+        page: targetPage.index, opacity: style.opacity, artifact: true
       });
     }
 
@@ -349,7 +444,7 @@ class FlowLayout {
       if (bstyle === 'none' || bstyle === 'hidden') continue;
       decorations.push({
         type: 'rect', x: sx, y: sy, width: sw, height: sh, fill: color,
-        page: targetPage.index, opacity: style.opacity,
+        page: targetPage.index, opacity: style.opacity, artifact: true,
         dash: bstyle === 'dashed' ? [3, 2] : (bstyle === 'dotted' ? [1, 2] : null)
       });
     }
@@ -402,12 +497,12 @@ class FlowLayout {
 
       for (const item of line.items) {
         if (item.type === 'image') {
-          this.emit({
+          this.inFigure(item, () => this.emit({
             type: 'image', image: item.image, src: item.src,
             x: penX, y: this.cursorY + lineHeight - item.height,
             width: item.width, height: item.height,
             page: this.current.index, opacity: item.style ? item.style.opacity : 1
-          });
+          }));
           penX += item.width;
           continue;
         }
@@ -416,6 +511,12 @@ class FlowLayout {
           - (lineHeight - item.style.fontSize * 0.8) / 2;
 
         if (!item.isSpace) {
+          // Bağlantı metni kendi `Link` yapı elemanına girer; açıklama nesnesi
+          // sonradan (nesne numarası belli olunca) OBJR ile ona bağlanır.
+          const linkNode = item.href
+            ? this.struct.push('Link', { alt: item.linkTitle || null })
+            : null;
+
           this.emit({
             type: 'text', text: item.text, face: item.face, style: item.style,
             x: penX, y: itemBaseline, fontSize: item.style.fontSize,
@@ -427,14 +528,14 @@ class FlowLayout {
             this.emit({
               type: 'rect', x: penX, y: itemBaseline + item.style.fontSize * 0.12,
               width: item.width, height: Math.max(0.5, item.style.fontSize * 0.05),
-              fill: item.style.color, page: this.current.index
+              fill: item.style.color, page: this.current.index, artifact: true
             });
           }
           if (item.style.textDecoration.includes('line-through')) {
             this.emit({
               type: 'rect', x: penX, y: itemBaseline - item.style.fontSize * 0.28,
               width: item.width, height: Math.max(0.5, item.style.fontSize * 0.05),
-              fill: item.style.color, page: this.current.index
+              fill: item.style.color, page: this.current.index, artifact: true
             });
           }
           if (item.href) {
@@ -442,8 +543,10 @@ class FlowLayout {
               page: this.current.index, uri: item.href,
               rect: { x: penX, y: itemBaseline - item.style.fontSize * 0.25,
                       width: item.width, height: item.style.fontSize * 1.1 },
+              structNode: linkNode,
               _pending: true
             });
+            this.struct.pop();
           }
         }
         penX += item.width + (item.isSpace ? extraSpace : 0);
@@ -654,15 +757,25 @@ class FlowLayout {
   }
 
   /** Satırları çizim listesine yazar; kullanılan yüksekliği döndürür. */
-  emitRows(rows, x, startY, columns, tableStyle) {
+  emitRows(rows, x, startY, columns, tableStyle, repeated = false) {
     let y = startY;
     for (const row of rows) {
       const cells = row.children.filter((c) => c.kind === 'box');
       const rowHeight = this.measureRow(row, columns, tableStyle);
 
+      // Satır ve hücreler yapı ağacında TR / TH / TD olarak açılır.
+      // Sayfa başına TEKRARLANAN başlık satırları görsel yinelemedir; ekran
+      // okuyucu onları ikinci kez okumasın diye yapay sayılırlar.
+      const tagged = !repeated;
+      if (tagged) this.struct.push('TR', attrsFor(row));
+
       let cellX = x;
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i];
+        const cellAttrs = attrsFor(cell);
+        const isHeader = cell.tag === 'th';
+        if (isHeader && !cellAttrs.scope) cellAttrs.scope = 'Column';
+        if (tagged) this.struct.push(isHeader ? 'TH' : 'TD', cellAttrs);
         const colWidth = columns[i] || columns[columns.length - 1] || 50;
         const e = this.engine.edges(cell.style, colWidth);
 
@@ -670,8 +783,8 @@ class FlowLayout {
         const bg = toColor(cell.style.raw['background-color']) ||
                    toColor(row.style.raw['background-color']);
         if (bg && bg[3] > 0) {
-          this.emit({ type: 'rect', x: cellX, y, width: colWidth, height: rowHeight,
-                      fill: bg, page: this.current.index });
+          this.emitArtifact({ type: 'rect', x: cellX, y, width: colWidth, height: rowHeight,
+                              fill: bg, page: this.current.index });
         }
         for (const side of ['top', 'right', 'bottom', 'left']) {
           const bw = e.border[side];
@@ -683,8 +796,8 @@ class FlowLayout {
             left:   [cellX, y, bw, rowHeight],
             right:  [cellX + colWidth - bw, y, bw, rowHeight]
           }[side];
-          this.emit({ type: 'rect', x: geom[0], y: geom[1], width: geom[2], height: geom[3],
-                      fill: color, page: this.current.index });
+          this.emitArtifact({ type: 'rect', x: geom[0], y: geom[1], width: geom[2], height: geom[3],
+                              fill: color, page: this.current.index });
         }
 
         // Hücre içeriği
@@ -695,8 +808,10 @@ class FlowLayout {
         this.emitLinesNoBreak(lines, cellX + e.padding.left + e.border.left, inner, cell.style);
         this.cursorY = savedCursor;
 
+        if (tagged) this.struct.pop();      // TH / TD
         cellX += colWidth;
       }
+      if (tagged) this.struct.pop();        // TR
       y += rowHeight;
     }
     return y - startY;
@@ -714,9 +829,10 @@ class FlowLayout {
       let penX = x + Math.max(0, offset);
       for (const item of line.items) {
         if (item.type === 'image') {
-          this.emit({ type: 'image', image: item.image, src: item.src,
-                      x: penX, y: this.cursorY + lineHeight - item.height,
-                      width: item.width, height: item.height, page: this.current.index });
+          this.inFigure(item, () => this.emit({
+            type: 'image', image: item.image, src: item.src,
+            x: penX, y: this.cursorY + lineHeight - item.height,
+            width: item.width, height: item.height, page: this.current.index }));
           penX += item.width;
           continue;
         }

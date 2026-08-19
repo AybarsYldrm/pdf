@@ -28,6 +28,7 @@ const { prepareCAdES, completeCAdES } = require('@fitfak/pades/src/cades/cades_b
 const { verifyPdf } = require('@fitfak/verify');
 const p12 = require('@fitfak/pkcs12');
 const pdfDoc = require('@fitfak/pdf-doc');
+const conformance = require('@fitfak/conformance');
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
@@ -154,6 +155,7 @@ const routes = {
       tsa: CONFIG.tsaUrl,
       themes: paper.THEMES,
       stampTemplates: Object.keys(templates),
+      conformanceProfiles: ['pdf/a-1b', 'pdf/a-2b', 'pdf/a-3b', 'pdf/ua', 'pdf/a-2b+pdf/ua'],
       serverSidePfx: CONFIG.allowServerSidePfx,
       maxBodyBytes: CONFIG.maxBodyBytes
     });
@@ -174,13 +176,15 @@ const routes = {
       fonts: body.fonts || [{ family: 'Ubuntu', src: CONFIG.defaultFont }],
       page: body.page || { size: 'A4', margin: '20mm 18mm' },
       metadata: body.metadata || {},
+      conformance: body.conformance || null,
       baseDir: ROOT
     });
 
     sendJson(res, 200, {
       pdf: b64(result.pdf),
       manifest: result.manifest,
-      warnings: result.warnings
+      warnings: result.warnings,
+      conformance: result.conformance || null
     });
   },
 
@@ -282,6 +286,30 @@ const routes = {
       preservedOriginal: !body.rewrite,
       applied
     });
+  },
+
+  /**
+   * PDF/A ve PDF/UA uyumluluk denetimi.
+   *
+   * Belgeyi ÜRETMEZ, denetler: `profiles` verilmezse belgenin XMP'de iddia
+   * ettiği profiller sınanır.
+   */
+  'POST /api/conformance/check': async (req, res) => {
+    const body = await readJson(req);
+    const pdf = unb64(body.pdf);
+    if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
+
+    let report;
+    try {
+      report = conformance.check(pdf, {
+        profiles: Array.isArray(body.profiles) && body.profiles.length ? body.profiles : undefined,
+        password: body.password || ''
+      });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_CONFORMANCE', err.message);
+    }
+
+    sendJson(res, 200, { ...report, text: conformance.formatReport(report) });
   },
 
   /** Damga önizlemesi (PNG) */
@@ -776,7 +804,16 @@ function createServer() {
   });
 }
 
-if (require.main === module) {
+/**
+ * Sunucuyu başlatır. Hem `node server.js` hem `fitfak-belge serve` bunu çağırır
+ * ki iki giriş noktası aynı davranışı paylaşsın.
+ */
+function start() {
+  // Ortam değişkenleri modül yüklendikten SONRA değişmiş olabilir (CLI yolu)
+  CONFIG.port = Number(process.env.PORT) || CONFIG.port;
+  CONFIG.host = process.env.HOST || CONFIG.host;
+  CONFIG.tsaUrl = process.env.TSA_URL || CONFIG.tsaUrl;
+
   // paper.css derlenmiş olsun
   try { paper.build(); } catch (err) { console.warn('paper.css derlenemedi:', err.message); }
 
@@ -789,6 +826,9 @@ if (require.main === module) {
     console.log(`  Gövde sınırı : ${(CONFIG.maxBodyBytes / 1024 / 1024).toFixed(0)} MB`);
     console.log(`  Not: Varsayılan akışta özel anahtar tarayıcıdan çıkmaz.\n`);
   });
+  return server;
 }
 
-module.exports = { createServer, CONFIG, routes };
+if (require.main === module) start();
+
+module.exports = { createServer, start, CONFIG, routes };

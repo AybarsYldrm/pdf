@@ -61,6 +61,8 @@ export const api = {
   pdfOpen:       (pdfBytes, password) =>
                    request('/api/pdf/open', { pdf: toBase64(pdfBytes), password: password || undefined }),
   pdfEdit:       (payload) => request('/api/pdf/edit', payload),
+  conformance:   (pdfBytes, profiles) =>
+                   request('/api/conformance/check', { pdf: toBase64(pdfBytes), profiles }),
   stampPreview:  (payload) => request('/api/stamp/preview', payload),
   pfxIdentities: (pfxBytes, password) =>
                    request('/api/pfx/identities', { pfx: toBase64(pfxBytes), password }),
