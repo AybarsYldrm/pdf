@@ -80,7 +80,6 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 .output
 
 # Gatsby files
@@ -141,3 +140,20 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# --- proje ---
+# packages/paper/dist derlenmis CSS'tir ve REPOYA DAHILDIR (jenerik 'dist' kurali
+# yukaridan kaldirildi). Asagidakiler gercekten gecici olanlardir:
+*.pfx
+*.p12
+certs/
+out/
+tmp/
+temp_draft.pdf
+signed*.pdf
+tsa_serial.bin
+# Uyumluluk örnekleri: 'npm run conformance:report' ile üretilir (RAPOR.md depoda)
+docs/conformance/ornekler/
+!test/fixtures/**/*.pfx
+!test/fixtures/**/*.p12
+!test/fixtures/certs/

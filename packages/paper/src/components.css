@@ -1,0 +1,266 @@
+/* ==========================================================================
+   @fitfak/paper — Bileşenler
+   ========================================================================== */
+
+/* ── Antet (letterhead) ───────────────────────────────────────────────── */
+
+.paper-letterhead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding-bottom: var(--sp-3);
+  border-bottom: var(--rule-medium) solid var(--c-accent);
+  margin-bottom: var(--sp-6);
+}
+
+.paper-letterhead__logo { width: 46pt; height: 46pt; }
+
+.paper-letterhead__org { flex-grow: 1; }
+
+.paper-letterhead__name {
+  display: block;
+  font-size: var(--fs-lg);
+  font-weight: bold;
+  color: var(--c-accent);
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-letterhead__unit {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--c-ink-soft);
+}
+
+.paper-letterhead__contact {
+  font-size: var(--fs-xs);
+  color: var(--c-ink-faint);
+  text-align: right;
+  width: 140pt;
+}
+
+/* ── Başlık bloğu ─────────────────────────────────────────────────────── */
+
+.paper-titleblock {
+  margin-bottom: var(--sp-6);
+}
+
+.paper-titleblock h1 {
+  margin-bottom: var(--sp-3);
+}
+
+.paper-titleblock--center {
+  text-align: center;
+}
+
+.paper-titleblock--boxed {
+  padding: var(--sp-4);
+  background: var(--c-accent-soft);
+  border-left: var(--rule-bold) solid var(--c-accent);
+}
+
+/* ── Künye tablosu (etiket/değer) ─────────────────────────────────────── */
+
+.paper-metatable {
+  display: table;
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.paper-metatable tr { display: table-row; }
+
+.paper-metatable td,
+.paper-metatable th {
+  display: table-cell;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: var(--rule-hair) solid var(--c-rule-soft);
+  text-align: left;
+}
+
+.paper-metatable th {
+  width: 90pt;
+  color: var(--c-ink-soft);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+/* ── Veri tablosu ─────────────────────────────────────────────────────── */
+
+.paper-table {
+  display: table;
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.paper-table th {
+  display: table-cell;
+  padding: var(--sp-2);
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: bold;
+  text-align: left;
+  border-bottom: var(--rule-thin) solid var(--c-accent);
+}
+
+.paper-table td {
+  display: table-cell;
+  padding: var(--sp-2);
+  border-bottom: var(--rule-hair) solid var(--c-rule-soft);
+}
+
+.paper-table--zebra tbody tr:nth-child(even) td {
+  background: var(--c-paper-alt);
+}
+
+.paper-table--bordered td,
+.paper-table--bordered th {
+  border: var(--rule-hair) solid var(--c-rule);
+}
+
+.paper-table--compact td,
+.paper-table--compact th {
+  padding: var(--sp-1);
+  font-size: var(--fs-xs);
+}
+
+.paper-table .num { text-align: right; font-family: var(--font-mono); }
+
+/* ── Uyarı kutuları ───────────────────────────────────────────────────── */
+
+.paper-callout {
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0 0 var(--sp-4);
+  border-left: var(--rule-bold) solid var(--c-rule-strong);
+  background: var(--c-paper-alt);
+  font-size: var(--fs-sm);
+  break-inside: avoid;
+}
+
+.paper-callout__title {
+  display: block;
+  font-weight: bold;
+  margin-bottom: var(--sp-1);
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-callout--info    { border-left-color: var(--c-info);   }
+.paper-callout--ok      { border-left-color: var(--c-ok);     }
+.paper-callout--warn    { border-left-color: var(--c-warn);   }
+.paper-callout--danger  { border-left-color: var(--c-danger); }
+
+.paper-callout--info .paper-callout__title   { color: var(--c-info);   }
+.paper-callout--ok .paper-callout__title     { color: var(--c-ok);     }
+.paper-callout--warn .paper-callout__title   { color: var(--c-warn);   }
+.paper-callout--danger .paper-callout__title { color: var(--c-danger); }
+
+/* ── İmza yuvaları ────────────────────────────────────────────────────────
+   ÖNEMLİ: `data-signer` özniteliği taşıyan her eleman, PDF motoru tarafından
+   LAYOUT MANIFEST'e yazılır. İmza motoru koordinatları oradan okur; kodda
+   sabit koordinat yazmaya gerek kalmaz.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.paper-signature-row {
+  display: flex;
+  gap: var(--sig-gap);
+  margin-top: var(--sp-10);
+  break-inside: avoid;
+}
+
+.paper-signature-row--end    { justify-content: flex-end; }
+.paper-signature-row--between { justify-content: space-between; }
+.paper-signature-row--center { justify-content: center; }
+
+.paper-sig-slot {
+  width: var(--sig-width);
+  min-height: var(--sig-height);
+  padding-top: var(--sp-2);
+  border-top: var(--rule-thin) solid var(--c-rule-strong);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-soft);
+  break-inside: avoid;
+}
+
+.paper-sig-slot__role {
+  display: block;
+  font-weight: bold;
+  color: var(--c-ink);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.paper-sig-slot__name {
+  display: block;
+  margin-top: var(--sp-1);
+}
+
+.paper-sig-slot__title {
+  display: block;
+  color: var(--c-ink-faint);
+}
+
+.paper-sig-slot--wide   { width: 75mm; }
+.paper-sig-slot--narrow { width: 42mm; }
+.paper-sig-slot--tall   { min-height: 32mm; }
+
+/* ── Damga / QR yuvası ────────────────────────────────────────────────── */
+
+.paper-stamp-slot {
+  width: 26mm;
+  height: 26mm;
+}
+
+.paper-stamp-slot--wide { width: 55mm; height: 14mm; }
+
+/* ── Alt bilgi ────────────────────────────────────────────────────────── */
+
+.paper-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-2);
+  border-top: var(--rule-hair) solid var(--c-rule);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-faint);
+}
+
+.paper-footer__doc  { flex-grow: 1; }
+.paper-footer__page { width: 90pt; text-align: right; }
+
+/* ── Filigran ─────────────────────────────────────────────────────────── */
+
+.paper-watermark {
+  position: absolute;
+  top: 40%;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 64pt;
+  font-weight: bold;
+  color: var(--c-rule-soft);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+
+/* ── Doğrulama şeridi ─────────────────────────────────────────────────── */
+
+.paper-verify {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  margin-top: var(--sp-6);
+  padding: var(--sp-3);
+  background: var(--c-paper-alt);
+  border-left: var(--rule-medium) solid var(--c-accent);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-soft);
+  break-inside: avoid;
+}
+
+.paper-verify__qr { width: 22mm; height: 22mm; }
+.paper-verify__text { flex-grow: 1; }

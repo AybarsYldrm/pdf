@@ -1,0 +1,15 @@
+{
+  "name": "@fitfak/conformance",
+  "version": "1.0.0",
+  "description": "PDF/A ve PDF/UA uyumluluk denetimi — sıfır bağımlılık.",
+  "main": "index.js",
+  "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "files": ["index.js", "src/"],
+  "keywords": ["pdf", "pdf-a", "pdf-ua", "accessibility", "archiving", "conformance"],
+  "dependencies": {
+    "@fitfak/pdf-doc": "^1.0.0"
+  },
+  "publishConfig": { "access": "public" }
+}

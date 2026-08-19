@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FITFAK Belge Studio</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<header class="app-bar">
+  <div class="app-bar__brand">
+    <span class="app-bar__mark"></span>
+    <span class="app-bar__name">FITFAK <strong>Belge Studio</strong></span>
+  </div>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Çalışma alanları">
+    <button class="tab is-active" role="tab" data-tab="design"  aria-selected="true">Tasarla</button>
+    <button class="tab" role="tab" data-tab="edit"   aria-selected="false">Düzenle</button>
+    <button class="tab" role="tab" data-tab="sign"   aria-selected="false">İmzala</button>
+    <button class="tab" role="tab" data-tab="verify" aria-selected="false">Doğrula</button>
+  </nav>
+
+  <div class="app-bar__actions">
+    <span class="badge badge--lock" id="keyBadge" title="Varsayılan akışta özel anahtarınız tarayıcıdan çıkmaz">
+      Anahtar tarayıcıda
+    </span>
+    <button class="btn btn--ghost" id="themeToggle" type="button" aria-label="Koyu/açık tema">Tema</button>
+  </div>
+</header>
+
+<main class="workspace">
+
+  <!-- ── SOL PANEL ─────────────────────────────────────────────── -->
+  <aside class="panel panel--left" id="leftPanel">
+
+    <!-- Tasarla -->
+    <section class="pane" data-pane="design">
+      <h2 class="pane__title">Belge</h2>
+
+      <label class="field">
+        <span class="field__label">Tema</span>
+        <select id="themeSelect" class="input"></select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Sayfa</span>
+        <select id="pageSize" class="input">
+          <option value="A4">A4 dikey</option>
+          <option value="A4 landscape">A4 yatay</option>
+          <option value="A5">A5 dikey</option>
+          <option value="LETTER">Letter</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Başlık</span>
+        <input id="docTitle" class="input" type="text" value="Resmî Bilgilendirme Belgesi">
+      </label>
+
+      <label class="field">
+        <span class="field__label">Belge no</span>
+        <input id="docNo" class="input" type="text">
+      </label>
+
+      <label class="field field--grow">
+        <span class="field__label">HTML içerik</span>
+        <textarea id="htmlSource" class="input input--code" spellcheck="false"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Uyumluluk profili</span>
+        <select id="conformance" class="input">
+          <option value="">Yok (standart PDF)</option>
+        </select>
+      </label>
+
+      <div class="pane__actions">
+        <button class="btn btn--primary" id="btnRender" type="button">PDF üret</button>
+        <button class="btn" id="btnDownload" type="button" disabled>İndir</button>
+        <button class="btn" id="btnConformance" type="button" disabled>Uyumluluğu denetle</button>
+      </div>
+      <p class="hint" id="renderHint">Önizleme, PDF motoruyla <strong>aynı CSS</strong> ile çizilir.</p>
+      <p class="hint">PDF/A arşivlenebilirlik (gömülü font + ICC profili),
+        PDF/UA erişilebilirlik (etiketli yapı ağacı) demektir.</p>
+    </section>
+
+    <!-- Düzenle -->
+    <section class="pane is-hidden" data-pane="edit">
+      <h2 class="pane__title">Mevcut PDF</h2>
+
+      <label class="field">
+        <span class="field__label">PDF yükle</span>
+        <input id="editFile" class="input input--file" type="file" accept=".pdf">
+      </label>
+
+      <label class="field is-hidden" id="editPassField">
+        <span class="field__label">Belge parolası</span>
+        <input id="editPass" class="input" type="password" autocomplete="off">
+      </label>
+
+      <div class="docmeta is-hidden" id="editSummary"></div>
+
+      <h2 class="pane__title">Sayfa</h2>
+      <label class="field">
+        <span class="field__label">Çalışılan sayfa</span>
+        <select id="editPage" class="input" disabled></select>
+      </label>
+
+      <div class="pane__actions pane__actions--wrap">
+        <button class="btn btn--sm" id="btnRotateLeft" type="button" disabled>↺ 90°</button>
+        <button class="btn btn--sm" id="btnRotateRight" type="button" disabled>↻ 90°</button>
+        <button class="btn btn--sm" id="btnPageUp" type="button" disabled>↑ Yukarı</button>
+        <button class="btn btn--sm" id="btnPageDown" type="button" disabled>↓ Aşağı</button>
+        <button class="btn btn--sm" id="btnPageInsert" type="button" disabled>+ Boş sayfa</button>
+        <button class="btn btn--sm btn--danger" id="btnPageDelete" type="button" disabled>Sil</button>
+      </div>
+
+      <h2 class="pane__title">Yerleştirme</h2>
+      <p class="hint">Aşağıdaki sayfa şemasında bir <strong>dikdörtgen çizin</strong>;
+        seçim PDF koordinatlarına çevrilir.</p>
+      <div class="placer" id="placer" aria-label="Sayfa üzerinde konum seçimi">
+        <div class="placer__sheet" id="placerSheet">
+          <div class="placer__rect is-hidden" id="placerRect"></div>
+        </div>
+        <div class="placer__readout" id="placerReadout">seçim yok</div>
+      </div>
+
+      <label class="field">
+        <span class="field__label">Görsel (PNG / JPEG)</span>
+        <input id="editImage" class="input input--file" type="file" accept="image/png,image/jpeg">
+      </label>
+
+      <div class="pane__actions pane__actions--wrap">
+        <label class="field field--inline">
+          <span class="field__label">Saydamlık</span>
+          <input id="editOpacity" class="input input--num" type="number" min="0.05" max="1" step="0.05" value="1">
+        </label>
+        <button class="btn btn--sm" id="btnPlaceImage" type="button" disabled>Görseli yerleştir</button>
+      </div>
+
+      <label class="field">
+        <span class="field__label">Metin</span>
+        <input id="editText" class="input" type="text" placeholder="Sayfaya yazılacak metin">
+      </label>
+      <div class="pane__actions pane__actions--wrap">
+        <label class="field field--inline">
+          <span class="field__label">Punto</span>
+          <input id="editTextSize" class="input input--num" type="number" min="4" max="72" step="1" value="11">
+        </label>
+        <button class="btn btn--sm" id="btnPlaceText" type="button" disabled>Metni ekle</button>
+      </div>
+
+      <div class="formfields is-hidden" id="editFormFields">
+        <h2 class="pane__title">Form alanları</h2>
+        <div id="formFieldList"></div>
+        <label class="check">
+          <input type="checkbox" id="flattenForm">
+          <span>Doldurduktan sonra <em>düzleştir</em> (alanlar kalıcı içeriğe döner)</span>
+        </label>
+        <div class="pane__actions">
+          <button class="btn btn--sm" id="btnFillForm" type="button">Formu doldur</button>
+        </div>
+      </div>
+
+      <h2 class="pane__title">Üst veri</h2>
+      <label class="field">
+        <span class="field__label">Başlık</span>
+        <input id="editMetaTitle" class="input" type="text">
+      </label>
+      <label class="field">
+        <span class="field__label">Yazar</span>
+        <input id="editMetaAuthor" class="input" type="text">
+      </label>
+      <div class="pane__actions">
+        <button class="btn btn--sm" id="btnSaveMeta" type="button" disabled>Üst veriyi yaz</button>
+      </div>
+
+      <div class="pane__actions">
+        <button class="btn" id="btnEditDownload" type="button" disabled>İndir</button>
+        <button class="btn btn--primary" id="btnEditToSign" type="button" disabled>İmzaya gönder</button>
+      </div>
+      <p class="hint" id="editHint">Tüm düzenlemeler <strong>artımlı</strong> yazılır:
+        belgedeki mevcut imzalar geçerli kalır.</p>
+    </section>
+
+    <!-- İmzala -->
+    <section class="pane is-hidden" data-pane="sign">
+      <h2 class="pane__title">İmza kimliği</h2>
+
+      <label class="field">
+        <span class="field__label">PFX / P12 dosyası</span>
+        <input id="pfxFile" class="input input--file" type="file" accept=".pfx,.p12">
+      </label>
+
+      <label class="field">
+        <span class="field__label">Parola</span>
+        <input id="pfxPass" class="input" type="password" autocomplete="off">
+      </label>
+
+      <button class="btn" id="btnPfxOpen" type="button">Kimlikleri oku</button>
+
+      <div class="identity is-hidden" id="identityBox">
+        <select id="identitySelect" class="input"></select>
+        <dl class="identity__meta" id="identityMeta"></dl>
+      </div>
+
+      <h2 class="pane__title">İmza yuvası</h2>
+      <select id="slotSelect" class="input"></select>
+
+      <h2 class="pane__title">Görünüm</h2>
+      <label class="field">
+        <span class="field__label">Damga şablonu</span>
+        <select id="stampTemplate" class="input"></select>
+      </label>
+      <div class="stamp-preview" id="stampPreview" aria-live="polite"></div>
+
+      <h2 class="pane__title">Seviye</h2>
+      <div class="levels" id="levelGroup" role="radiogroup" aria-label="İmza seviyesi">
+        <label class="level"><input type="radio" name="level" value="B"><span><b>B-B</b> Temel</span></label>
+        <label class="level"><input type="radio" name="level" value="T"><span><b>B-T</b> Zaman damgalı</span></label>
+        <label class="level"><input type="radio" name="level" value="LT" checked><span><b>B-LT</b> Uzun vadeli</span></label>
+        <label class="level"><input type="radio" name="level" value="LTA"><span><b>B-LTA</b> Arşiv</span></label>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="serverSide">
+        <span>PFX'i sunucuda çöz <em>(anahtar sunucuya gider)</em></span>
+      </label>
+
+      <div class="pane__actions">
+        <button class="btn btn--primary" id="btnSign" type="button" disabled>İmzala</button>
+      </div>
+      <p class="hint" id="signHint"></p>
+    </section>
+
+    <!-- Doğrula -->
+    <section class="pane is-hidden" data-pane="verify">
+      <h2 class="pane__title">Doğrulanacak belge</h2>
+      <label class="field">
+        <span class="field__label">PDF yükle</span>
+        <input id="verifyFile" class="input input--file" type="file" accept=".pdf">
+      </label>
+      <label class="check">
+        <input type="checkbox" id="allowNetwork">
+        <span>Ağ üzerinden iptal sorgusuna izin ver</span>
+      </label>
+      <div class="pane__actions">
+        <button class="btn btn--primary" id="btnVerify" type="button">Doğrula</button>
+        <button class="btn" id="btnVerifyConformance" type="button">Uyumluluk</button>
+      </div>
+      <p class="hint">LTV verisi gömülü belgeler <strong>çevrimdışı</strong> doğrulanabilir.</p>
+    </section>
+  </aside>
+
+  <!-- ── TUVAL ─────────────────────────────────────────────────── -->
+  <section class="canvas" id="canvasArea">
+    <div class="canvas__toolbar">
+      <span class="canvas__status" id="canvasStatus">Hazır</span>
+      <div class="canvas__zoom">
+        <button class="btn btn--icon" id="zoomOut" type="button" aria-label="Uzaklaştır">−</button>
+        <span id="zoomLabel">%100</span>
+        <button class="btn btn--icon" id="zoomIn" type="button" aria-label="Yakınlaştır">+</button>
+      </div>
+    </div>
+    <div class="canvas__scroll" id="canvasScroll">
+      <!-- HTML önizlemesi: sandbox KALICIDIR, script asla çalışmaz -->
+      <iframe class="preview" id="preview" title="Belge önizlemesi" sandbox="allow-same-origin"></iframe>
+      <!-- PDF önizlemesi: tarayıcının yerleşik görüntüleyicisi (blob: URL) -->
+      <iframe class="preview is-hidden" id="pdfPreview" title="PDF önizlemesi"></iframe>
+    </div>
+  </section>
+
+  <!-- ── SAĞ PANEL ─────────────────────────────────────────────── -->
+  <aside class="panel panel--right">
+    <h2 class="pane__title">İmza paneli</h2>
+    <div id="signaturePanel" class="sigpanel">
+      <p class="empty">Henüz doğrulanmış imza yok.</p>
+    </div>
+
+    <h2 class="pane__title">Uyumluluk</h2>
+    <div id="conformancePanel" class="confpanel">
+      <p class="empty">Henüz denetim yapılmadı.</p>
+    </div>
+  </aside>
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

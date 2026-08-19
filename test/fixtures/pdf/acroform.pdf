@@ -1,0 +1,100 @@
+%PDF-1.6
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+3 0 obj
+<<  /Length 240 >>
+stream
+BT /F1 16 Tf 60 780 Td (Basvuru Formu) Tj ET
+BT /F1 10 Tf 60 726 Td (Ad Soyad:) Tj ET
+BT /F1 10 Tf 60 686 Td (Adres:) Tj ET
+BT /F1 10 Tf 60 626 Td (Sehir:) Tj ET
+BT /F1 10 Tf 60 596 Td (Onay:) Tj ET
+BT /F1 10 Tf 60 566 Td (Cinsiyet:) Tj ET
+
+endstream
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /FT /Tx /T (ad) /Rect [140 720 400 740] /DA (0 0 0.4 rg /Helv 11 Tf) /MaxLen 60 >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /FT /Tx /Ff 4096 /T (adres) /Rect [140 660 400 710] /DA (0 g /Helv 9 Tf) >>
+endobj
+12 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /FT /Ch /T (sehir) /Rect [140 620 300 640] /DA (0 g /Helv 10 Tf) /Opt [(Ankara) (Istanbul) (Izmir)] /V (Ankara) >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /FT /Btn /T (onay) /Rect [140 590 158 608] /DA (0 g /ZaDb 0 Tf) /AS /Off /AP << /N << /Yes 20 0 R /Off 21 0 R >> >> >>
+endobj
+14 0 obj
+<< /FT /Btn /Ff 32768 /T (cinsiyet) /V /Off /Kids [15 0 R 16 0 R] >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /Parent 14 0 R /Rect [140 560 156 576] /AS /Off /AP << /N << /K 20 0 R /Off 21 0 R >> >> >>
+endobj
+16 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /Parent 14 0 R /Rect [200 560 216 576] /AS /Off /AP << /N << /E 20 0 R /Off 21 0 R >> >> >>
+endobj
+17 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 4 0 R /FT /Sig /T (imza) /Rect [380 540 560 600] >>
+endobj
+20 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 18 18] /Length 50 >>
+stream
+q 0 g 3 3 m 8 9 l 15 15 l 13 17 l 8 12 l 5 5 l f Q
+endstream
+endobj
+21 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 18 18] /Length 28 >>
+stream
+q 0.6 g 0.5 0.5 17 17 re S Q
+endstream
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Annots [10 0 R 11 0 R 12 0 R 13 0 R 15 0 R 16 0 R 17 0 R] >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> >>
+endobj
+22 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+23 0 obj
+<< /Fields [10 0 R 11 0 R 12 0 R 13 0 R 14 0 R 17 0 R] /NeedAppearances true /DR << /Font << /Helv 22 0 R >> >> /DA (0 g /Helv 10 Tf) >>
+endobj
+24 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 23 0 R >>
+endobj
+xref
+0 25
+0000000000 65535 f 
+0000000015 00000 n 
+0000001951 00000 n 
+0000000112 00000 n 
+0000001829 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+0000000404 00000 n 
+0000000550 00000 n 
+0000000689 00000 n 
+0000000867 00000 n 
+0000001049 00000 n 
+0000001134 00000 n 
+0000001289 00000 n 
+0000001444 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+0000001553 00000 n 
+0000001702 00000 n 
+0000002077 00000 n 
+0000002175 00000 n 
+0000002328 00000 n 
+trailer
+<< /Size 25 /Root 24 0 R /ID [<0102030405060708090A0B0C0D0E0F10> <0102030405060708090A0B0C0D0E0F10>] >>
+startxref
+2395
+%%EOF

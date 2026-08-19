@@ -1,8 +1,34 @@
 {
-  "dependencies": {
-    "@fitfak/pades": "^1.0.0",
-    "@fitfak/pdf": "^1.0.0",
-    "@fitfak/qr": "^1.0.0",
-    "@fitfak/ssl": "^2.1.0"
+  "name": "fitfak-belge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PAdES B-LTA imzalama, LTV, PDF üretimi ve belge stüdyosu — yalnızca Node.js dahili modülleri ile",
+  "license": "MIT",
+  "author": {
+    "name": "Aybars Yıldırım",
+    "email": "network@fitfak.net",
+    "url": "https://aybars.net.tr"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "bin": {
+    "fitfak-belge": "bin/fitfak-belge.js"
+  },
+  "scripts": {
+    "test": "node --test 'test/unit/**/*.test.js'",
+    "test:e2e": "node --test 'test/e2e/**/*.test.js'",
+    "test:all": "node --test 'test/**/*.test.js'",
+    "fixtures": "npm run fixtures:pkcs12 && npm run fixtures:pdf",
+    "fixtures:pkcs12": "bash test/fixtures/pkcs12/generate.sh",
+    "fixtures:pdf": "node test/fixtures/pdf/generate.js",
+    "start": "node apps/server/server.js",
+    "cli": "node bin/fitfak-belge.js",
+    "conformance:report": "node scripts/conformance-report.js",
+    "example": "node examples/01-multi-sign.js"
   }
 }

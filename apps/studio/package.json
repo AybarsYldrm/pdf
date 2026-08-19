@@ -1,0 +1,7 @@
+{
+  "name": "@fitfak/studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FITFAK Belge Studio — vanilla JS arayüz (framework/bundler yok).",
+  "main": "index.html"
+}

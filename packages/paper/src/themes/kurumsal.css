@@ -1,0 +1,14 @@
+/* Tema: kurumsal — lacivert, ince cetveller, kurumsal ciddiyet.
+   (Projenin mevcut index.js estetiğinin sistemleştirilmiş hâli.) */
+.paper--kurumsal {
+  --c-ink: #14202b;
+  --c-ink-soft: #47535f;
+  --c-ink-faint: #8b959e;
+  --c-accent: #142d5f;
+  --c-accent-soft: #e8edf6;
+  --c-rule: #c8ced6;
+  --c-rule-soft: #e6e9ee;
+  --c-rule-strong: #7a8794;
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+}
