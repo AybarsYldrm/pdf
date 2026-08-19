@@ -197,7 +197,18 @@ function encodeLength(len) {
  *             contentTypeValid:boolean|null, signingCertificateValid:boolean|null,
  *             errors:string[] }}
  */
-function verifySignerInfo(signerInfo, signerCertDer, contentDigest) {
+/**
+ * @param {Object} signerInfo
+ * @param {Buffer} signerCertDer
+ * @param {Buffer|null} contentDigest
+ * @param {string} [expectedContentType] beklenen `content-type` özniteliği.
+ *   Belge imzalarında `id-data`, RFC 3161 zaman damgalarında `id-ct-TSTInfo`
+ *   olmalıdır. Sabit `id-data` varsaymak, zaman damgalarında bu kontrolü
+ *   anlamsız bir hataya çevirir ve gerçekten yanlış türde bir jetonu
+ *   ayırt edilemez kılar.
+ */
+function verifySignerInfo(signerInfo, signerCertDer, contentDigest,
+                          expectedContentType = OIDS.data) {
   const result = {
     signatureValid: false,
     messageDigestMatches: null,
@@ -230,8 +241,11 @@ function verifySignerInfo(signerInfo, signerCertDer, contentDigest) {
     } else {
       const t = readTLV(ctValues[0], 0);
       const oid = oidFromBytes(ctValues[0].slice(t.start, t.end));
-      result.contentTypeValid = (oid === OIDS.data);
-      if (!result.contentTypeValid) result.errors.push(`content-type beklenmedik: ${oid}`);
+      result.contentTypeValid = (oid === expectedContentType);
+      if (!result.contentTypeValid) {
+        result.errors.push(
+          `content-type beklenmedik: ${oid} (beklenen ${expectedContentType})`);
+      }
     }
 
     // 3. signing-certificate-v2 (ESS) — imzalayan sertifikayı bağlar

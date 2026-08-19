@@ -43,6 +43,11 @@ test.before(async () => {
   const mod = require('../../apps/server/server');
   mod.CONFIG.tsaUrl = svc.endpoints.tsa;
 
+  // Sunucu tarafı PFX imzalama VARSAYILAN OLARAK KAPALIDIR (özel anahtar
+  // sunucuya gelmesin diye). Bu yolu sınayan testler onu AÇIKÇA açar —
+  // varsayılanın kapalı olduğu ayrıca sınanır.
+  mod.CONFIG.allowServerSidePfx = true;
+
   server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -51,6 +56,13 @@ test.before(async () => {
 test.after(async () => {
   if (server) await new Promise((r) => server.close(r));
   if (svc) await svc.close();
+});
+
+// Hız sınırlayıcı gerçek bir savunmadır; test paketi tek istemciden çok sayıda
+// hassas istek attığı için her testten önce sıfırlanır. Sınırın kendisi
+// 'hız sınırı hassas uçları korur' testinde ayrıca sınanır.
+test.beforeEach(() => {
+  require('../../apps/server/server').rateLimiter.reset();
 });
 
 const HTML = `<article class="paper paper--kurumsal">
@@ -470,4 +482,81 @@ test('İmzalı belge düzenlenince imza geçerli kalır (uçtan uca)', async () 
   assert.strictEqual(report.signatures[0].cms.signatureValid, true);
   assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
     'değişiklik gizlenmemeli');
+});
+
+test('sunucu tarafı PFX VARSAYILAN OLARAK kapalıdır', async () => {
+  const mod = require('../../apps/server/server');
+  const saved = mod.CONFIG.allowServerSidePfx;
+
+  // Ortam değişkeni yorumu: yalnız '1' açar
+  const yorumla = (value) => {
+    const before = process.env.ALLOW_SERVER_PFX;
+    if (value === undefined) delete process.env.ALLOW_SERVER_PFX;
+    else process.env.ALLOW_SERVER_PFX = value;
+    const result = process.env.ALLOW_SERVER_PFX === '1';
+    if (before === undefined) delete process.env.ALLOW_SERVER_PFX;
+    else process.env.ALLOW_SERVER_PFX = before;
+    return result;
+  };
+
+  assert.strictEqual(yorumla(undefined), false, 'tanımsız → kapalı');
+  assert.strictEqual(yorumla('0'), false, "'0' → kapalı");
+  assert.strictEqual(yorumla('true'), false, "'true' bile açmamalı");
+  assert.strictEqual(yorumla(''), false, 'boş → kapalı');
+  assert.strictEqual(yorumla('1'), true, "yalnız '1' açar");
+
+  // Kapalıyken uç 403 döner ve PFX hiç işlenmez
+  mod.CONFIG.allowServerSidePfx = false;
+  try {
+    const res = await call('/api/sign/pfx', {
+      pdf: b64(fixture('classic-xref.pdf')), pfx: b64(makePfx()), password: 'e'
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.error.code, 'ERR_SERVER_PFX_DISABLED');
+  } finally {
+    mod.CONFIG.allowServerSidePfx = saved;
+  }
+});
+
+test('hız sınırı hassas uçları korur', async () => {
+  const mod = require('../../apps/server/server');
+  mod.rateLimiter.reset();
+
+  const limit = mod.policy.RATE.maxSensitive;
+  let firstBlocked = null;
+
+  // Sınırı aşana kadar bas
+  for (let i = 0; i < limit + 3; i++) {
+    const res = await call('/api/pfx/identities', { pfx: b64(Buffer.alloc(4)), password: 'x' });
+    if (res.status === 429) { firstBlocked = i; break; }
+  }
+
+  assert.ok(firstBlocked !== null, `hassas uç ${limit + 3} istekte sınırlanmadı`);
+  assert.ok(firstBlocked >= limit,
+    `sınır çok erken devreye girdi: ${firstBlocked} < ${limit}`);
+
+  const blocked = await call('/api/pfx/identities', { pfx: b64(Buffer.alloc(4)), password: 'x' });
+  assert.strictEqual(blocked.status, 429);
+  assert.strictEqual(blocked.body.error.code, 'ERR_RATE_LIMIT');
+  assert.ok(blocked.headers.get('retry-after'), 'Retry-After başlığı olmalı');
+
+  // Sıfırlandıktan sonra yeniden çalışmalı
+  mod.rateLimiter.reset();
+  const after = await call('/api/pfx/identities', { pfx: b64(Buffer.alloc(4)), password: 'x' });
+  assert.notStrictEqual(after.status, 429);
+});
+
+test('sağlık ucu hız sınırından ve kimlik doğrulamadan muaftır', async () => {
+  const mod = require('../../apps/server/server');
+  mod.rateLimiter.reset();
+
+  // /api/health 'public' sınıfındadır ama hız sınırına yine de tabidir;
+  // önemli olan kimlik doğrulama istememesidir.
+  const res = await fetch(base + '/api/health');
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  assert.strictEqual(body.ok, true);
+  assert.strictEqual(mod.policy.classify('GET /api/health'), 'public');
+  assert.strictEqual(mod.policy.classify('POST /api/sign/pfx'), 'sensitive');
+  assert.strictEqual(mod.policy.classify('POST /api/render'), 'compute');
 });

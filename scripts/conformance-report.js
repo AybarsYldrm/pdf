@@ -22,7 +22,7 @@ const ROOT = path.join(__dirname, '..');
 const OUT_DIR = path.join(ROOT, 'docs', 'conformance');
 const SAMPLE_DIR = path.join(OUT_DIR, 'ornekler');
 const FONT = path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf');
-const LOGO = path.join(ROOT, 'apps', 'studio', 'favicon.png');
+const LOGO = 'apps/studio/favicon.png';   // baseDir (ROOT) kum havuzuna göreli
 
 /* ------------------------------------------------------------------ */
 /* Belge tipleri                                                       */

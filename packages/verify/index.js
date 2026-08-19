@@ -121,7 +121,11 @@ async function verifyPdf(pdfBuffer, opts = {}) {
       await verifyOneSignature(sig, {
         pdfBuffer, dss, trustAnchors, validationTime, useEmbedded,
         allowNetwork: !!opts.allowNetwork, revisions,
-        ignoreTimestampPoe: !!opts.ignoreTimestampPoe
+        ignoreTimestampPoe: !!opts.ignoreTimestampPoe,
+        // Seviye belirlemesi metin aramasıyla DEĞİL, ayrıştırılmış imza
+        // alanlarıyla yapılır (bkz. determineLevel)
+        allSignatures: signatures,
+        strictTimestamps: opts.strictTimestamps !== false
       })
     );
   }
@@ -281,6 +285,16 @@ async function verifyOneSignature(sig, ctx) {
     entry.timestamps.push(verifyTimestamp(sig.cmsDer, null, ctx));
   }
 
+  // Reddedilen bir zaman damgası SESSİZCE geçilmemeli. İmzanın kendisi hâlâ
+  // sağlam olabilir (B-B), ama belge iddia ettiği T/LT/LTA seviyesine
+  // ulaşamaz ve POE üretmez. Raporda görünmezse, kullanıcı belgeyi damgalı
+  // sanmaya devam eder — saldırganın istediği tam olarak budur.
+  for (const ts of entry.timestamps) {
+    if (ts.valid) continue;
+    const why = ts.errors.length ? ts.errors.join('; ') : 'doğrulanamadı';
+    entry.warnings.push(`Zaman damgası reddedildi (${ts.type}): ${why}`);
+  }
+
   // POE (Proof of Existence): geçerli bir zaman damgası, imzanın O AN var
   // olduğunu kanıtlar. Sertifika bugün süresi dolmuş olsa bile, damga anında
   // geçerliyse imza geçerli sayılır (ETSI TS 119 102-1). Doğrulama zamanı bu
@@ -392,13 +406,13 @@ function verifyDocTimeStamp(sig, entry, ctx) {
 
   const eContentDigest = crypto.createHash(si.digestAlgorithm || 'sha256')
     .update(parsed.eContent).digest();
-  const res = cms.verifySignerInfo(si, tsaCert, eContentDigest);
-
   // content-type burada id-ct-TSTInfo olmalıdır — 'data' değil.
+  const res = cms.verifySignerInfo(si, tsaCert, eContentDigest, cms.OIDS.tstInfo);
+
   entry.cms = {
     signatureValid: res.signatureValid,
     messageDigestMatches: res.messageDigestMatches,
-    contentTypeValid: parsed.eContentType === cms.OIDS.tstInfo,
+    contentTypeValid: res.contentTypeValid && parsed.eContentType === cms.OIDS.tstInfo,
     signingCertificateV2Matches: res.signingCertificateValid
   };
 
@@ -430,7 +444,19 @@ function verifyDocTimeStamp(sig, entry, ctx) {
     return entry;
   }
   if (!ekuValid) {
-    entry.warnings.push('TSA sertifikasında id-kp-timeStamping EKU yok (RFC 3161 §2.3)');
+    // RFC 3161 §2.3 bunu ZORUNLU kılar. Uyarıya indirgemek, herhangi bir
+    // sertifikayla üretilmiş "zaman damgası"nın geçerli sayılması demektir;
+    // arşiv damgasının bütün değeri buradan gelir.
+    //
+    // `strictTimestamps: false` verilirse TOTAL-FAILED yerine INDETERMINATE
+    // döner: kanıt eksiktir ama belge kesin sahte de değildir.
+    entry.indication = ctx.strictTimestamps === false
+      ? INDICATION.INDETERMINATE
+      : INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    entry.errors.push('TSA sertifikasında id-kp-timeStamping EKU yok (RFC 3161 §2.3) — ' +
+      'bu sertifika zaman damgası üretmeye yetkili değil');
+    return entry;
   }
 
   // TSA zinciri
@@ -467,7 +493,7 @@ function verifyTimestamp(tstDer, signatureValue, ctx) {
   const out = {
     type: signatureValue ? 'signature-timestamp' : 'document-timestamp',
     valid: false, genTime: null, tsa: null, hashAlgorithm: null,
-    imprintMatches: null, ekuValid: null, errors: []
+    imprintMatches: null, ekuValid: null, contentTypeValid: null, errors: []
   };
 
   try {
@@ -501,8 +527,16 @@ function verifyTimestamp(tstDer, signatureValue, ctx) {
     const eContentDigest = parsed.eContent
       ? crypto.createHash(si.digestAlgorithm || 'sha256').update(parsed.eContent).digest()
       : null;
-    const res = cms.verifySignerInfo(si, tsaCert, eContentDigest);
-    out.valid = res.signatureValid && out.ekuValid !== false &&
+    // RFC 3161 §2.4.2: jetonun içeriği id-ct-TSTInfo olmalıdır. Bunu 'data'
+    // beklermiş gibi doğrulamak, kontrolü her jetonda başarısız kılar ve
+    // dolayısıyla anlamsızlaştırır.
+    const res = cms.verifySignerInfo(si, tsaCert, eContentDigest, cms.OIDS.tstInfo);
+    out.contentTypeValid = res.contentTypeValid !== false &&
+                           parsed.eContentType === cms.OIDS.tstInfo;
+    if (!out.contentTypeValid) {
+      out.errors.push('Jetonun içerik türü id-ct-TSTInfo değil — bu bir zaman damgası değil');
+    }
+    out.valid = res.signatureValid && out.ekuValid !== false && out.contentTypeValid &&
                 (out.imprintMatches === null || out.imprintMatches === true);
     out.errors.push(...res.errors);
   } catch (err) {
@@ -544,6 +578,8 @@ function parseTstInfo(der) {
 /** DSS'ten (çevrimdışı) ya da ağdan iptal durumunu belirler. */
 async function checkRevocation(path, vriKeys, ctx, checkTime) {
   const results = [];
+  /** Eşleşen ama doğrulamayı geçemeyen OCSP yanıtlarının gerekçeleri. */
+  const ocspRejections = [];
 
   for (let i = 0; i < path.length; i++) {
     const cert = path[i];
@@ -570,12 +606,28 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
       }
     }
 
-    // 2. DSS'teki OCSP yanıtları
+    // 2. DSS'teki OCSP yanıtları — CertID eşleşmesi ve İMZA doğrulanır
     if (!found && ctx.useEmbedded && ctx.dss && ctx.dss.ocsps.length) {
-      const ocspHit = matchOcsp(ctx.dss.ocsps, cert, issuer);
+      const ocspHit = matchOcsp(ctx.dss.ocsps, cert, issuer, {
+        at: checkTime,
+        extraCerts: [...(ctx.dss.certs || []), ...path],
+        rejections: ocspRejections
+      });
       if (ocspHit) {
-        found = { subject: info.cn, source: 'dss-ocsp', status: ocspHit.status,
-                  producedAt: ocspHit.producedAt };
+        found = {
+          subject: info.cn, source: 'dss-ocsp', status: ocspHit.status,
+          producedAt: ocspHit.producedAt ? ocspHit.producedAt.toISOString() : null,
+          thisUpdate: ocspHit.thisUpdate ? ocspHit.thisUpdate.toISOString() : null,
+          nextUpdate: ocspHit.nextUpdate ? ocspHit.nextUpdate.toISOString() : null,
+          responder: ocspHit.responderCn || null,
+          reason: ocspHit.revocationReason
+        };
+      } else if (ocspRejections.length) {
+        // Yanıt VAR ama doğrulanamadı: bu sessizce geçilmemeli
+        found = {
+          subject: info.cn, source: 'dss-ocsp', status: 'unknown',
+          error: ocspRejections[ocspRejections.length - 1]
+        };
       }
     }
 
@@ -596,27 +648,47 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
   return results;
 }
 
-/** DSS'teki OCSP yanıtlarından sertifikaya uyanı bulur (kaba eşleşme). */
-function matchOcsp(ocsps, certDer, issuerDer) {
-  const { readTLV } = require('@fitfak/pades/src/cades/x509_extract');
-  const serial = ext.getSerial(certDer);
+/**
+ * DSS'teki OCSP yanıtlarından bu sertifikaya AİT ve GEÇERLİ olanı bulur.
+ *
+ * Eskiden burada `der.includes(serial)` vardı: seri numarası baytları yanıtın
+ * herhangi bir yerinde geçse yanıt kabul ediliyor, imza hiç doğrulanmıyordu.
+ * Bu, iptal edilmiş bir sertifikayı geçerli göstermeye yetiyordu — yani LTV'nin
+ * tüm amacını boşa çıkarıyordu. Artık RFC 6960'a göre:
+ *
+ *   • CertID (issuerNameHash + issuerKeyHash + serialNumber) HESAPLANARAK
+ *     eşleştirilir,
+ *   • BasicOCSPResponse imzası doğrulanır,
+ *   • yanıtlayanın yetkisi (CA'nın kendisi ya da OCSPSigning EKU'lu delege)
+ *     sınanır,
+ *   • thisUpdate/nextUpdate penceresi kontrol edilir.
+ *
+ * Bunlardan biri bile başarısızsa yanıt KULLANILMAZ; sessizce "good" denmez.
+ */
+function matchOcsp(ocsps, certDer, issuerDer, opts = {}) {
+  const ocspLib = require('./src/ocsp');
+  const rejections = opts.rejections || [];
+
   for (const der of ocsps) {
-    // Seri numarası yanıtın içinde geçiyorsa bu yanıt bu sertifikaya ait sayılır.
-    if (der.includes(serial)) {
-      // 'revoked' (tag [1]) işaretini ara: CertStatus ::= CHOICE { good [0] IMPLICIT NULL, revoked [1] ... }
-      const revoked = der.includes(Buffer.from([0xA1])) && looksRevoked(der, serial);
-      return { status: revoked ? 'revoked' : 'good', producedAt: null };
+    let res;
+    try {
+      res = ocspLib.verifyOcspResponse(der, certDer, issuerDer, {
+        at: opts.at, extraCerts: opts.extraCerts || []
+      });
+    } catch (err) {
+      rejections.push(`OCSP yanıtı işlenemedi: ${err.message}`);
+      continue;
     }
+
+    if (!res.matched) continue;                       // başka sertifikanın yanıtı
+
+    if (res.errors.length) {
+      rejections.push(res.errors.join('; '));
+      continue;                                        // eşleşti ama GÜVENİLMEZ
+    }
+    return res;
   }
   return null;
-}
-
-function looksRevoked(der, serial) {
-  // Basit sezgisel: seri numarasından hemen sonra [1] (0xA1) geliyorsa iptal.
-  const idx = der.indexOf(serial);
-  if (idx < 0) return false;
-  const after = der.slice(idx + serial.length, idx + serial.length + 6);
-  return after.length > 0 && after[0] === 0xA1;
 }
 
 /** Root'taki /DSS sözlüğünü okur. */
@@ -728,11 +800,35 @@ function isSelfSignedIn(certDer, anchors) {
 }
 
 /** ETSI seviye tespiti. */
+/**
+ * PAdES temel seviyesini belirler — ETSI EN 319 142-1.
+ *
+ * Eskiden `pdfBuffer.toString('latin1').includes('/Type /DocTimeStamp')`
+ * kullanılıyordu. Bu bir kanıt değil, metin aramasıdır: kullanıcının yazdığı
+ * bir paragrafta ya da gömülü bir dosyada o dizge geçse belge B-LTA görünürdü.
+ *
+ * Artık üç ölçüt de DOĞRULANMIŞ kanıta dayanır:
+ *   B-T   → imza zaman damgası kriptografik olarak geçerli
+ *   B-LT  → imza yolundaki sertifikalar için DSS'te KULLANILABİLİR iptal
+ *           kanıtı var (imzası doğrulanmış OCSP ya da CRL)
+ *   B-LTA → belgede gerçekten ayrıştırılmış bir DocTimeStamp imza alanı var
+ */
 function determineLevel(entry, sig, ctx) {
   const hasTimestamp = entry.timestamps.some((t) => t.valid);
-  const hasRevocation = entry.revocation.some((r) => r.source.startsWith('dss'));
-  const hasDocTs = ctx.pdfBuffer.toString('latin1').includes('/Type /DocTimeStamp') ||
-                   ctx.pdfBuffer.toString('latin1').includes('/SubFilter /ETSI.RFC3161');
+
+  // "DSS'te bir şey var" yetmez: kanıt bu sertifikaya ait ve GEÇERLİ olmalı.
+  // status === 'unknown' olan kayıtlar (doğrulanamayan yanıtlar) sayılmaz.
+  const usableRevocation = entry.revocation.filter(
+    (r) => r.source && r.source.startsWith('dss') &&
+           (r.status === 'good' || r.status === 'revoked'));
+
+  // Zincirdeki kendinden imzalı olmayan her sertifika için kanıt gerekir
+  const needed = entry.revocation.length;
+  const hasRevocation = needed > 0 && usableRevocation.length === needed;
+
+  // DocTimeStamp: metin araması değil, ayrıştırılmış imza alanı
+  const hasDocTs = (ctx.allSignatures || []).some(
+    (s) => s.type === 'doc-timestamp' || s.subFilter === 'ETSI.RFC3161');
 
   if (!hasTimestamp) return 'B-B';
   if (!hasRevocation) return 'B-T';

@@ -38,8 +38,14 @@ class FontManager {
     if (!face || !face.family || !face.src) {
       throw new Error('FontManager.register: family ve src zorunlu');
     }
-    const file = path.resolve(face.src);
-    if (!fs.existsSync(file)) {
+    // Kaynak ya doğrulanmış bir dosya YOLU ya da doğrudan BAYT olabilir.
+    // Güvenilmez CSS'ten gelen @font-face kaynakları çağıran tarafından
+    // kum havuzundan geçirilip Buffer olarak verilir (bkz. assets/resolver).
+    const bytes = Buffer.isBuffer(face.src) ? face.src : null;
+    const file = bytes ? (face.id || `buffer:${face.family}:${face.weight}:${face.style}`)
+                       : path.resolve(face.src);
+
+    if (!bytes && !fs.existsSync(file)) {
       throw new Error(`Font dosyası bulunamadı: ${file}`);
     }
 
@@ -53,7 +59,7 @@ class FontManager {
       const hit = list.find((f) => f.file === file);
       if (hit) { parser = hit.parser; break; }
     }
-    if (!parser) parser = new TtfParser(file);
+    if (!parser) parser = new TtfParser(bytes || file);
 
     const id = `F${++this._counter}`;
     const entry = { weight, style, parser, file, id, family: face.family };

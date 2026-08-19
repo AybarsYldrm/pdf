@@ -19,6 +19,7 @@ const { LayoutEngine } = require('./src/layout/engine');
 const { FlowLayout } = require('./src/layout/flow');
 const { PdfEmitter, embedFont } = require('./src/pdf/emitter');
 const { assignMcids, writeStructTree } = require('./src/pdf/tagged');
+const { AssetResolver, AssetError } = require('./src/assets/resolver');
 const { FontManager } = require('./src/font/manager');
 const { toPt, toColor } = require('./src/css/values');
 
@@ -50,6 +51,11 @@ class HtmlRenderError extends Error {
  * @param {{size?:string, orientation?:string, margin?:string|Object, width?:number, height?:number}} [o.page]
  * @param {Object} [o.metadata] { title, author, subject, keywords, lang, creator }
  * @param {string} [o.baseDir] Göreli görsel/font yolları için taban dizin
+ * @param {string[]} [o.assetRoots] Belgeden gelen varlıkların okunabileceği
+ *        dizinler. Verilmezse `baseDir` kullanılır. Bu KUM HAVUZUDUR: HTML/CSS
+ *        içindeki yollar buranın dışına çıkamaz.
+ * @param {boolean} [o.allowAbsoluteAssets=false] belgedeki mutlak yollara izin ver
+ * @param {boolean} [o.allowRemoteAssets=false] uzak URL'lere izin ver (SSRF!)
  * @param {boolean} [o.compress=true]
  * @param {boolean} [o.strict=false] true → desteklenmeyen CSS hata verir
  * @returns {{ pdf: Buffer, manifest: Object, warnings: Array }}
@@ -59,6 +65,18 @@ function render(o = {}) {
 
   const baseDir = o.baseDir || process.cwd();
   const warnings = [];
+
+  /* Varlık kum havuzu ------------------------------------------------
+   * GÜVEN SINIRI: `o.fonts` çağıranın JS'inden gelir → güvenilir.
+   * `<img src>` ve `@font-face url()` BELGEDEN gelir → güvenilmez ve
+   * kum havuzundan geçmek zorundadır. Bu ayrım olmadan güvenilmez HTML
+   * sunucunun dosya sistemini okur. */
+  const assets = new AssetResolver({
+    roots: o.assetRoots && o.assetRoots.length ? o.assetRoots : [baseDir],
+    allowAbsolute: o.allowAbsoluteAssets === true,
+    allowRemote: o.allowRemoteAssets === true,
+    limits: o.assetLimits
+  });
 
   /* 1. HTML → DOM ------------------------------------------------- */
   const { root: dom, styles: inlineStyles, title: docTitle } = parseHtml(o.html);
@@ -86,13 +104,25 @@ function render(o = {}) {
     if (!family || !srcRaw) continue;
     const m = /url\(\s*["']?([^"')]+)["']?\s*\)/i.exec(srcRaw);
     if (!m) continue;
-    const src = path.isAbsolute(m[1]) ? m[1] : path.join(baseDir, m[1]);
-    if (!fs.existsSync(src)) {
-      warnings.push({ type: 'font', message: `@font-face kaynağı bulunamadı: ${src}` });
+
+    // @font-face BELGEDEN gelir: kum havuzundan geçmeli
+    let bytes;
+    try {
+      bytes = assets.read(m[1], { kind: 'font' }).data;
+    } catch (err) {
+      warnings.push({
+        type: 'font',
+        code: err.code || 'ERR_FONT_LOAD',
+        message: `@font-face kaynağı yüklenemedi (${err.code || 'hata'}): ${String(m[1]).slice(0, 80)}`
+      });
       continue;
     }
+
     try {
-      fonts.register({ family, weight: valueOf(ff['font-weight']), style: valueOf(ff['font-style']), src });
+      fonts.register({
+        family, src: bytes,
+        weight: valueOf(ff['font-weight']), style: valueOf(ff['font-style'])
+      });
     } catch (err) {
       warnings.push({ type: 'font', message: err.message });
     }
@@ -106,12 +136,15 @@ function render(o = {}) {
   const imageCache = new Map();
   const loadImage = (src) => {
     if (imageCache.has(src)) return imageCache.get(src);
-    const file = path.isAbsolute(src) ? src : path.join(baseDir, src);
-    if (!fs.existsSync(file)) throw new Error(`bulunamadı: ${file}`);
-    const buf = fs.readFileSync(file);
-    const lower = file.toLowerCase();
+
+    // Görsel kaynağı BELGEDEN gelir: doğrudan fs'e verilemez
+    const { data: buf } = assets.read(src, { kind: 'image' });
+
+    // Tür, uzantıdan DEĞİL sihirli baytlardan belirlenir: uzantı belgeden
+    // gelir ve yanıltıcı olabilir.
+    const isJpeg = buf.length > 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
     let parsed;
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+    if (isJpeg) {
       const JpegParser = require('@fitfak/pdf/src/media/JpegParser');
       const p = new JpegParser(buf);
       parsed = { kind: 'jpeg', width: p.width, height: p.height, buffer: buf, parser: p };

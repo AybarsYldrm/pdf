@@ -29,6 +29,7 @@ const { verifyPdf } = require('@fitfak/verify');
 const p12 = require('@fitfak/pkcs12');
 const pdfDoc = require('@fitfak/pdf-doc');
 const conformance = require('@fitfak/conformance');
+const policy = require('./src/policy');
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
@@ -36,11 +37,18 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
 const CONFIG = {
   port: Number(process.env.PORT) || 8787,
   host: process.env.HOST || '127.0.0.1',
-  maxBodyBytes: Number(process.env.MAX_BODY) || 32 * 1024 * 1024,
+  maxBodyBytes: policy.LIMITS.maxBodyBytes,
   sessionTtlMs: 120000,
   tsaUrl: process.env.TSA_URL || 'http://timestamp.digicert.com',
-  allowServerSidePfx: process.env.ALLOW_SERVER_PFX !== '0',
-  defaultFont: process.env.PDF_FONT || path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf')
+  // Özel anahtarın sunucuya gelmesi VARSAYILAN OLARAK KAPALIDIR.
+  // Açık şekilde '1' verilmediği sürece bu yol kullanılamaz: yanlışlıkla
+  // açık kalan bir dağıtım, kullanıcıların özel anahtarlarını toplar.
+  // Birincil imzalama modeli iki fazlı tarayıcı imzalamasıdır.
+  allowServerSidePfx: process.env.ALLOW_SERVER_PFX === '1',
+  defaultFont: process.env.PDF_FONT || path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf'),
+  // Belgeden gelen varlıkların okunabileceği TEK dizin (kum havuzu).
+  // Depo kökü VERİLMEZ: güvenilmez HTML kaynak kodunu ve anahtarları okurdu.
+  assetRoot: process.env.ASSET_ROOT || path.join(ROOT, 'assets')
 };
 
 /* ------------------------------------------------------------------ */
@@ -48,6 +56,9 @@ const CONFIG = {
 /* ------------------------------------------------------------------ */
 
 const sessions = new Map();
+
+/** Hız sınırlayıcı — bellek içi, tek süreç. */
+const rateLimiter = new policy.RateLimiter();
 
 function putSession(data) {
   const id = crypto.randomBytes(16).toString('hex');
@@ -104,25 +115,71 @@ function sendError(res, status, code, message, details) {
   sendJson(res, status, { error: { code, message, ...(details ? { details } : {}) } });
 }
 
+/**
+ * Gövdeyi SINIRLI olarak okur.
+ *
+ * Sınır aşıldığında iki şeyi aynı anda istiyoruz:
+ *   1. fazladan bayt BELLEĞE ALINMASIN,
+ *   2. istemci 413 yanıtını GÖRSÜN.
+ *
+ * Soketi anında koparmak (2)'yi imkânsız kılar: istemci "bağlantı sıfırlandı"
+ * görür ve neden reddedildiğini asla öğrenemez — hata ayıklanamaz bir uç.
+ * Bu yüzden kalan baytlar okunur ama biriktirilmez; israfı sınırlamak için
+ * yalnız sınırın iki katına kadar tolerans gösterilir, sonrası koparılır.
+ */
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    let chunks = [];
     let total = 0;
+    let overflowed = false;
+
     req.on('data', (c) => {
       total += c.length;
+
+      if (overflowed) {
+        // Yanıt yazılana kadar biraz tolerans; sonra bağlantı koparılır.
+        if (total > maxBytes * 2) req.destroy();
+        return;
+      }
       if (total > maxBytes) {
-        reject(Object.assign(new Error('İstek gövdesi çok büyük'), { code: 'ERR_BODY_TOO_LARGE' }));
-        req.destroy();
+        overflowed = true;
+        chunks = [];                                  // birikeni de bırak
+        reject(Object.assign(new Error('İstek gövdesi çok büyük'),
+          { code: 'ERR_BODY_TOO_LARGE', status: 413 }));
         return;
       }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+
+    req.on('end', () => { if (!overflowed) resolve(Buffer.concat(chunks)); });
+    req.on('error', (err) => { if (!overflowed) reject(err); });
   });
 }
 
+/**
+ * `Content-Type: application/json` şart koşulur.
+ *
+ * Sadece biçim titizliği değil: tarayıcılar `text/plain`, `multipart/form-data`
+ * ve `application/x-www-form-urlencoded` gövdeli POST'ları "basit istek" sayar
+ * ve ÖN KONTROL (preflight) yapmadan başka kaynaklara gönderir. JSON şartı,
+ * çapraz kaynaklı bir sayfanın bu uçları sessizce tetiklemesini engeller.
+ */
+function requireJsonContentType(req) {
+  const len = req.headers['content-length'];
+  const chunked = req.headers['transfer-encoding'] !== undefined;
+  // Gövdesiz istekte içerik türü aramak anlamsızdır
+  if (!chunked && (len === undefined || len === '0')) return;
+
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') {
+    throw Object.assign(
+      new Error(`Content-Type application/json olmalı (gelen: ${type || 'yok'})`),
+      { code: 'ERR_CONTENT_TYPE', status: 415 });
+  }
+}
+
 async function readJson(req) {
+  requireJsonContentType(req);
   const buf = await readBody(req, CONFIG.maxBodyBytes);
   if (!buf.length) return {};
   try {
@@ -166,6 +223,14 @@ const routes = {
     const body = await readJson(req);
     if (!body.html) return sendError(res, 400, 'ERR_HTML_MISSING', 'html alanı zorunlu');
 
+    // Yerleşim motoru girdiyle DOĞRUSAL DEĞİL ölçeklenir; sınır burada
+    policy.checkBytes(Buffer.from(String(body.html), 'utf8'), 'maxHtmlBytes', 'HTML');
+    const cssTotal = []
+      .concat(body.css || [])
+      .reduce((n, c) => n + Buffer.byteLength(String(c), 'utf8'), 0);
+    policy.checkBytes({ length: cssTotal }, 'maxCssBytes', 'CSS');
+    policy.checkCount((body.fonts || []).length, 'maxFonts', 'font');
+
     const css = [];
     if (body.theme !== null) css.push(...paper.stack(body.theme || 'kurumsal'));
     if (body.css) css.push(...(Array.isArray(body.css) ? body.css : [body.css]));
@@ -177,7 +242,15 @@ const routes = {
       page: body.page || { size: 'A4', margin: '20mm 18mm' },
       metadata: body.metadata || {},
       conformance: body.conformance || null,
-      baseDir: ROOT
+      baseDir: ROOT,
+      // Belgeden gelen görsel/font yolları YALNIZ bu dizinden okunabilir.
+      // ROOT verilseydi güvenilmez HTML tüm depoyu okurdu.
+      assetRoots: [CONFIG.assetRoot],
+      assetLimits: {
+        maxImageBytes: policy.LIMITS.maxImageBytes,
+        maxFontBytes: policy.LIMITS.maxFontBytes,
+        maxAssets: policy.LIMITS.maxAssets
+      }
     });
 
     sendJson(res, 200, {
@@ -212,12 +285,15 @@ const routes = {
     const pdf = unb64(body.pdf);
     if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
 
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+
     let doc;
     try {
       doc = pdfDoc.PdfDocument.load(pdf, { password: body.password || '' });
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
     }
+    policy.checkPdf(pdf, doc);
 
     const pages = [];
     for (let i = 0; i < doc.pageCount; i++) {
@@ -262,6 +338,8 @@ const routes = {
     if (!Array.isArray(body.ops) || !body.ops.length) {
       return sendError(res, 400, 'ERR_OPS_MISSING', 'ops dizisi zorunlu');
     }
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+    policy.checkCount(body.ops.length, 'maxOps', 'düzenleme işlemi');
 
     let doc;
     try {
@@ -269,6 +347,7 @@ const routes = {
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
     }
+    policy.checkPdf(pdf, doc);
 
     const applied = [];
     try {
@@ -780,13 +859,45 @@ function createServer() {
 
     const handler = routes[key];
     if (handler) {
+      /* --- Erişim denetimi ------------------------------------------
+       * Hassas uçlar (imzalama, PFX, LTV) belirteç ister. Belirteç hiç
+       * yapılandırılmamışsa sunucu yalnız yerel kullanım varsayar ve
+       * başlangıçta uyarır. */
+      const decision = policy.authorize(req, key);
+      if (!decision.allowed) {
+        policy.auditLog({
+          event: 'auth.denied', route: key,
+          client: policy.clientKey(req), outcome: decision.code
+        });
+        return sendError(res, decision.status, decision.code, decision.message);
+      }
+
+      /* --- Hız sınırı ---------------------------------------------- */
+      const limit = decision.kind === 'sensitive'
+        ? policy.RATE.maxSensitive : policy.RATE.maxRequests;
+      const rate = rateLimiter.hit(policy.clientKey(req), limit);
+      if (!rate.allowed) {
+        res.setHeader('Retry-After', Math.ceil(rate.retryAfterMs / 1000));
+        return sendError(res, 429, 'ERR_RATE_LIMIT',
+          `Çok fazla istek; ${Math.ceil(rate.retryAfterMs / 1000)} saniye sonra deneyin.`);
+      }
+
+      if (decision.kind === 'sensitive') {
+        policy.auditLog({
+          event: 'request', route: key, client: policy.clientKey(req),
+          outcome: decision.authenticated ? 'authenticated' : 'unauthenticated'
+        });
+      }
+
       try {
         await handler(req, res);
       } catch (err) {
         if (!res.headersSent) {
-          const status = err.code === 'ERR_BODY_TOO_LARGE' ? 413
-            : err.code === 'ERR_BAD_JSON' ? 400
-            : 500;
+          const status = err.status
+            || (err.code === 'ERR_BODY_TOO_LARGE' ? 413
+              : err.code === 'ERR_TOO_LARGE' ? 413
+              : /^ERR_(BAD_JSON|TOO_MANY|PDF_|ASSET_|PFX_|OP_|HTML_|CSS_)/.test(err.code || '') ? 400
+              : 500);
           sendError(res, status, err.code || 'ERR_INTERNAL', err.message);
         }
         if (!err.code) console.error('[sunucu hatası]', err);
@@ -818,12 +929,25 @@ function start() {
   try { paper.build(); } catch (err) { console.warn('paper.css derlenemedi:', err.message); }
 
   const server = createServer();
+  // Yavaş istemci saldırıları (Slowloris) için zaman aşımları
+  server.requestTimeout = policy.LIMITS.requestTimeoutMs;
+  server.headersTimeout = policy.LIMITS.headersTimeoutMs;
+
   server.listen(CONFIG.port, CONFIG.host, () => {
     console.log(`\n  FITFAK Belge Studio`);
     console.log(`  → http://${CONFIG.host}:${CONFIG.port}\n`);
     console.log(`  TSA          : ${CONFIG.tsaUrl}`);
     console.log(`  Sunucu PFX   : ${CONFIG.allowServerSidePfx ? 'açık (opt-in mod)' : 'kapalı'}`);
     console.log(`  Gövde sınırı : ${(CONFIG.maxBodyBytes / 1024 / 1024).toFixed(0)} MB`);
+    console.log(`  Kimlik doğr. : ${policy.authEnabled() ? 'açık (API_TOKENS)' : 'KAPALI'}`);
+    console.log(`  Varlık kökü  : ${CONFIG.assetRoot}`);
+
+    const dısaAcik = CONFIG.host !== '127.0.0.1' && CONFIG.host !== 'localhost' && CONFIG.host !== '::1';
+    if (dısaAcik && !policy.authEnabled()) {
+      console.warn('\n  ⚠ UYARI: sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
+        'tanımlı değil.\n    İmzalama ve PFX uçları kimlik doğrulamasız erişilebilir. ' +
+        'API_TOKENS ayarlayın.\n');
+    }
     console.log(`  Not: Varsayılan akışta özel anahtar tarayıcıdan çıkmaz.\n`);
   });
   return server;
@@ -831,4 +955,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { createServer, start, CONFIG, routes };
+module.exports = { createServer, start, CONFIG, routes, policy, rateLimiter };

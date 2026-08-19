@@ -279,7 +279,13 @@ class LayoutEngine {
 
       return { image: img, width: w, height: h, src };
     } catch (err) {
-      this.warnings.push({ type: 'image', message: `Görsel yüklenemedi: ${src} (${err.message})` });
+      // Kum havuzu reddi ile "bozuk PNG" ayrımı korunur: kullanıcı neyin
+      // neden reddedildiğini görmeli, ama yol bilgisi kısaltılarak verilir.
+      this.warnings.push({
+        type: 'image',
+        code: err.code || 'ERR_IMAGE_LOAD',
+        message: `Görsel yüklenemedi (${err.code || 'hata'}): ${String(src).slice(0, 80)}`
+      });
       return null;
     }
   }

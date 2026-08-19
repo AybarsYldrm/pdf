@@ -25,6 +25,7 @@ const {
 } = require('@fitfak/ssl/src/asn1');
 
 const { pkcs12Kdf, toBmpString, passwordVariants, ID_KEY_MATERIAL, ID_IV, ID_MAC_KEY } = require('./src/kdf');
+const limits = require('./src/limits');
 const rc2 = require('./src/rc2');
 
 /* ------------------------------------------------------------------ */
@@ -123,13 +124,15 @@ function wipe(buf) {
 /**
  * PKCS#12 PBE (RFC 7292 Ek C) ile şifre çözer.
  */
-function decryptPkcs12Pbe(oid, params, cipherText, passwordBmp) {
+function decryptPkcs12Pbe(oid, params, cipherText, passwordBmp, activeLimits) {
   const spec = PKCS12_PBE[oid];
   if (!spec) throw new Pkcs12Error('ERR_PKCS12_UNSUPPORTED_PBE', `Desteklenmeyen PBE: ${oid}`);
 
   const p = readChildren(params.content);
-  const salt = p[0].content;
-  const iterations = Number(derIntToBigInt(p[1].content));
+  const salt = limits.checkSalt(p[0].content, activeLimits);
+  // Sınır KDF'ten ÖNCE denetlenir: aksi hâlde iş zaten yapılmış olur.
+  const iterations = limits.checkIterations(
+    derIntToBigInt(p[1].content), activeLimits, 'PKCS#12 PBE');
 
   const key = pkcs12Kdf(passwordBmp, salt, ID_KEY_MATERIAL, iterations, spec.keyLen, spec.hash);
   const iv = spec.ivLen
@@ -161,7 +164,7 @@ function decryptPkcs12Pbe(oid, params, cipherText, passwordBmp) {
 /**
  * PBES2 (PBKDF2 + AES/3DES) ile şifre çözer.
  */
-function decryptPbes2(params, cipherText, password) {
+function decryptPbes2(params, cipherText, password, activeLimits) {
   const p = readChildren(params.content);
   const kdfSeq = readChildren(p[0].content);
   const kdfOid = oidOf(kdfSeq[0]);
@@ -170,8 +173,9 @@ function decryptPbes2(params, cipherText, password) {
   }
 
   const kdfParams = readChildren(kdfSeq[1].content);
-  const salt = kdfParams[0].content;
-  const iterations = Number(derIntToBigInt(kdfParams[1].content));
+  const salt = limits.checkSalt(kdfParams[0].content, activeLimits);
+  const iterations = limits.checkIterations(
+    derIntToBigInt(kdfParams[1].content), activeLimits, 'PBES2 PBKDF2');
 
   let hashName = 'sha1';
   let keyLenHint = null;
@@ -202,14 +206,14 @@ function decryptPbes2(params, cipherText, password) {
 }
 
 /** AlgorithmIdentifier'a bakıp doğru şemayı seçer. */
-function decryptWithAlgId(algIdNode, cipherText, password, passwordBmp) {
+function decryptWithAlgId(algIdNode, cipherText, password, passwordBmp, activeLimits) {
   const children = readChildren(algIdNode.content);
   const oid = oidOf(children[0]);
   if (oid === OIDS.pbes2) {
-    return decryptPbes2(children[1], cipherText, password);
+    return decryptPbes2(children[1], cipherText, password, activeLimits);
   }
   if (PKCS12_PBE[oid]) {
-    return decryptPkcs12Pbe(oid, children[1], cipherText, passwordBmp);
+    return decryptPkcs12Pbe(oid, children[1], cipherText, passwordBmp, activeLimits);
   }
   throw new Pkcs12Error('ERR_PKCS12_UNSUPPORTED_SCHEME', `Desteklenmeyen şifreleme şeması: ${oid}`);
 }
@@ -225,7 +229,7 @@ function decryptWithAlgId(algIdNode, cipherText, password, passwordBmp) {
  * @returns {{ present:boolean, verified:boolean, algorithm:string|null,
  *             iterations:number|null, passwordBmp:Buffer|null }}
  */
-function verifyMac(pfxChildren, authSafeOctets, password) {
+function verifyMac(pfxChildren, authSafeOctets, password, activeLimits) {
   if (pfxChildren.length < 3) {
     return { present: false, verified: false, algorithm: null, iterations: null, passwordBmp: null };
   }
@@ -238,7 +242,10 @@ function verifyMac(pfxChildren, authSafeOctets, password) {
   }
   const expectedDigest = digestInfo[1].content;
   const salt = macData[1].content;
-  const iterations = macData[2] ? Number(derIntToBigInt(macData[2].content)) : 1;
+  const iterations = macData[2]
+    ? limits.checkIterations(derIntToBigInt(macData[2].content), activeLimits, 'MacData')
+    : 1;
+  limits.checkSalt(salt, activeLimits);
 
   for (const pwd of passwordVariants(password)) {
     const macKey = pkcs12Kdf(pwd, salt, ID_MAC_KEY, iterations, hashLen(hashName), hashName);
@@ -263,7 +270,12 @@ function hashLen(name) {
 function parseBagAttributes(node) {
   const attrs = { friendlyName: null, localKeyId: null };
   if (!node || node.tag !== 0x31) return attrs;
-  for (const attr of readChildren(node.content)) {
+  const list = readChildren(node.content);
+  if (list.length > limits.DEFAULT_LIMITS.maxAttributes) {
+    throw new limits.Pkcs12LimitError('ERR_PFX_TOO_MANY',
+      `Çok fazla bag özniteliği: ${list.length} (sınır ${limits.DEFAULT_LIMITS.maxAttributes})`);
+  }
+  for (const attr of list) {
     const parts = readChildren(attr.content);
     const oid = oidOf(parts[0]);
     const values = readChildren(parts[1].content);
@@ -282,9 +294,15 @@ function parseBagAttributes(node) {
 }
 
 /** SafeContents içindeki çantaları çıkarır. */
-function extractBags(safeContentsDer, password, passwordBmp, out) {
+function extractBags(safeContentsDer, password, passwordBmp, out, activeLimits) {
   const seq = readTLV(safeContentsDer, 0);
-  for (const bagNode of readChildren(seq.content)) {
+  const bags = readChildren(seq.content);
+
+  // Şişirilmiş çanta listesi belleği tüketir; sayı önce sınanır
+  out._bagCount = (out._bagCount || 0) + bags.length;
+  limits.checkCount(out._bagCount, 'maxBags', activeLimits, 'SafeBag');
+
+  for (const bagNode of bags) {
     const bagChildren = readChildren(bagNode.content);
     const bagOid = oidOf(bagChildren[0]);
     const value = bagChildren[1];
@@ -296,12 +314,13 @@ function extractBags(safeContentsDer, password, passwordBmp, out) {
       const certType = oidOf(certBagChildren[0]);
       if (certType !== OIDS.x509Certificate) continue;
       const certOctet = readTLV(certBagChildren[1].content, 0);
+      limits.checkCount(out.certificates.length + 1, 'maxCertificates', activeLimits, 'sertifika');
       out.certificates.push({ der: Buffer.from(certOctet.content), ...attrs });
     }
     else if (bagOid === OIDS.pkcs8ShroudedKeyBag) {
       const epki = readTLV(value.content, 0);
       const epkiChildren = readChildren(epki.content);
-      const pkcs8 = decryptWithAlgId(epkiChildren[0], epkiChildren[1].content, password, passwordBmp);
+      const pkcs8 = decryptWithAlgId(epkiChildren[0], epkiChildren[1].content, password, passwordBmp, activeLimits);
       out.privateKeys.push({ der: pkcs8, ...attrs });
     }
     else if (bagOid === OIDS.keyBag) {
@@ -328,7 +347,11 @@ function extractBags(safeContentsDer, password, passwordBmp, out) {
  *
  * @param {Buffer} pfxDer
  */
-function probe(pfxDer) {
+function probe(pfxDer, opts = {}) {
+  // probe() KDF çalıştırmaz (yalnız üst veriyi okur), ama dev bir dosyayı
+  // ASN.1 olarak gezmek de maliyetlidir.
+  limits.checkSize(pfxDer, limits.resolveLimits(opts.limits));
+
   const info = {
     version: null,
     macAlgorithm: null,
@@ -406,6 +429,10 @@ function describePbe(oid) {
 function parse(pfxDer, password = '', opts = {}) {
   const verifyMacFlag = opts.verifyMac !== false;
 
+  // Kaynak tüketimi sınırları — PFX saldırgan denetimindedir (bkz. src/limits.js)
+  const activeLimits = limits.resolveLimits(opts.limits);
+  limits.checkSize(pfxDer, activeLimits);
+
   let pfx, children;
   try {
     pfx = readTLV(pfxDer, 0);
@@ -426,7 +453,7 @@ function parse(pfxDer, password = '', opts = {}) {
   let passwordBmp = toBmpString(password);
 
   if (children.length >= 3) {
-    const macResult = verifyMac(children, authSafeOctets, password);
+    const macResult = verifyMac(children, authSafeOctets, password, activeLimits);
     mac = {
       present: macResult.present,
       verified: macResult.verified,
@@ -457,7 +484,7 @@ function parse(pfxDer, password = '', opts = {}) {
       const cipherText = eci[2].content;
       let plain;
       try {
-        plain = decryptWithAlgId(eci[1], cipherText, password, passwordBmp);
+        plain = decryptWithAlgId(eci[1], cipherText, password, passwordBmp, activeLimits);
       } catch (err) {
         if (err.code === 'ERR_PKCS12_UNSUPPORTED_PBE' ||
             err.code === 'ERR_PKCS12_UNSUPPORTED_SCHEME' ||
@@ -465,12 +492,12 @@ function parse(pfxDer, password = '', opts = {}) {
         throw new Pkcs12Error('ERR_PKCS12_BAD_PASSWORD',
           `Şifreli içerik çözülemedi (parola yanlış olabilir): ${err.message}`);
       }
-      extractBags(plain, password, passwordBmp, raw);
+      extractBags(plain, password, passwordBmp, raw, activeLimits);
       wipe(plain);
     }
     else if (oid === OIDS.data) {
       const octetNode = readTLV(ciChildren[1].content, 0);
-      extractBags(octetNode.content, password, passwordBmp, raw);
+      extractBags(octetNode.content, password, passwordBmp, raw, activeLimits);
     }
   }
 
@@ -751,6 +778,8 @@ function build(o) {
 
 module.exports = {
   Pkcs12Error,
+  Pkcs12LimitError: limits.Pkcs12LimitError,
+  DEFAULT_LIMITS: limits.DEFAULT_LIMITS,
   probe,
   parse,
   build,
