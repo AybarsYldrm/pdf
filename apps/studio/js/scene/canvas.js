@@ -53,6 +53,11 @@ export class SceneCanvas {
 
     this._drag = null;
     this._els = new Map();       // nodeId → DOM elemanı
+    /** Etkin dokunuşlar (parmak kimliği → ekran noktası). */
+    this._touches = new Map();
+    this._pinch = null;
+    /** Yakınlaştırma değişince haber ver (araç çubuğu yüzdeyi gösterir). */
+    this.onZoom = null;
 
     this._buildChrome();
     this._bindEvents();
@@ -348,6 +353,12 @@ export class SceneCanvas {
         this.handleLayer.appendChild(
           el('div', { class: `sc-handle sc-handle--${dir}`, 'data-handle': dir }));
       }
+      // Dönme tutamağı yalnız TEK nesnede: çoklu seçimde her nesnenin
+      // kendi merkezi vardır ve hepsini tek merkez etrafında döndürmek,
+      // kullanıcının görmediği bir dönüşüm olurdu.
+      if (ids.length === 1) {
+        this.handleLayer.appendChild(el('div', { class: 'sc-rotate', 'data-rotate': '1' }));
+      }
     }
   }
 
@@ -398,11 +409,86 @@ export class SceneCanvas {
     this.surface.addEventListener('pointerdown', (e) => this._onPointerDown(e));
     window.addEventListener('pointermove', (e) => this._onPointerMove(e));
     window.addEventListener('pointerup', (e) => this._onPointerUp(e));
+    window.addEventListener('pointercancel', (e) => this._onPointerUp(e));
     this.surface.addEventListener('dblclick', (e) => {
       const hit = e.target.closest('.sc-node');
       if (hit) this.onDoubleClick(hit.dataset.id);
     });
     this.surface.addEventListener('keydown', (e) => this._onKeyDown(e));
+
+    // Ctrl/⌘ + tekerlek: masaüstünde yakınlaştırma. Tarayıcının SAYFAYI
+    // yakınlaştırması engellenir; kullanıcı belgeyi yakınlaştırmak ister,
+    // araç çubuğunu değil.
+    this.surface.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      this._zoomAround(e, this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    }, { passive: false });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Çoklu dokunuş                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * İki parmakla yakınlaştırma.
+   *
+   * Etkin işaretçiler izlenir; İKİ tanesi varsa aradaki mesafenin oranı
+   * yakınlaştırmadır. Tek parmak sürüklemesi bozulmaz: ikinci parmak
+   * değdiği anda sürükleme İPTAL EDİLİR (yarım kalmış bir taşıma, geri
+   * alma yığınına yarım bir adım yazmasın).
+   */
+  _trackPointer(event) {
+    if (event.pointerType !== 'touch') return false;
+    this._touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    return this._touches.size >= 2;
+  }
+
+  _beginPinch() {
+    if (this._drag) this._cancelDrag();
+    const [a, b] = [...this._touches.values()];
+    this._pinch = { distance: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.zoom };
+  }
+
+  _updatePinch() {
+    if (!this._pinch || this._touches.size < 2) return;
+    const [a, b] = [...this._touches.values()];
+    const distance = Math.hypot(a.x - b.x, a.y - b.y);
+    if (this._pinch.distance < 1) return;
+
+    const next = this._pinch.zoom * (distance / this._pinch.distance);
+    this._zoomAround({
+      clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2
+    }, next);
+  }
+
+  /**
+   * Verilen ekran noktası SABİT kalacak biçimde yakınlaştırır.
+   *
+   * Yalnız `zoom` değiştirilirse tuval sol üstten büyür ve kullanıcının
+   * baktığı yer ekrandan kaçar.
+   */
+  _zoomAround(event, nextZoom) {
+    const before = this._toPage(event);
+    this.setZoom(nextZoom);
+    const after = this._toPage(event);
+
+    this.surface.scrollLeft += (before.x - after.x) * this.zoom;
+    this.surface.scrollTop += (before.y - after.y) * this.zoom;
+    if (this.onZoom) this.onZoom(this.zoom);
+  }
+
+  /** Yarım kalan sürüklemeyi geri sarar. */
+  _cancelDrag() {
+    if (!this._drag) return;
+    // Yarım kalan sürükleme GERİ SARILIR: ikinci parmak değdiği anda
+    // nesnenin rastgele bir yerde kalması, kullanıcının yapmadığı bir
+    // değişikliği geçmişe yazmak olurdu.
+    if (this._drag.kind !== 'marquee') this.scene.history.rollback();
+    this._drag = null;
+    this.marquee.classList.add('is-hidden');
+    this._showGuides([]);
+    this.render();
   }
 
   /** Ekran noktasını sayfa koordinatına çevirir. */
@@ -415,14 +501,22 @@ export class SceneCanvas {
   }
 
   _onPointerDown(event) {
-    if (!this.scene || event.button !== 0) return;
+    if (!this.scene) return;
+    if (this._trackPointer(event)) { this._beginPinch(); return; }
+    if (event.button !== 0) return;
     // `preventScroll`: odak vermek tuvali kaydırmamalı. Kullanıcı bir nesneye
     // tıkladığında sayfanın altından zıplaması, sürüklemeyi imkânsız kılar.
     this.surface.focus({ preventScroll: true });
 
     const handle = event.target.closest('.sc-handle');
+    const rotateHandle = event.target.closest('.sc-rotate');
     const point = this._toPage(event);
 
+    if (rotateHandle) {
+      this._beginRotate(point);
+      event.preventDefault();
+      return;
+    }
     if (handle) {
       this._beginResize(handle.dataset.handle, point);
       event.preventDefault();
@@ -476,7 +570,10 @@ export class SceneCanvas {
     this.scene.history.begin('Taşı');
     this._drag = {
       kind: 'move', start: point, ids,
-      origin: ids.map((id) => ({ id, frame: { ...this.scene.node(id).frame } })),
+      origin: ids.map((id) => ({
+        id, frame: { ...this.scene.node(id).frame },
+        rotation: this.scene.node(id).rotation || 0
+      })),
       moved: false
     };
   }
@@ -496,12 +593,59 @@ export class SceneCanvas {
     };
   }
 
+  /**
+   * Dönmeyi başlatır.
+   *
+   * Açı, nesnenin MERKEZİNDEN imlece giden vektörden okunur; sürükleme
+   * sırasında imlecin tutamağa göre kayması dikkate alınır (`grabOffset`),
+   * yoksa tutamağa basıldığı anda nesne birden sıçrar.
+   */
+  _beginRotate(point) {
+    const ids = [...this.scene.selection].filter((id) => {
+      const n = this.scene.node(id);
+      return n && !n.locked;
+    });
+    if (ids.length !== 1) return;
+
+    const frame = this.scene.absoluteFrame(ids[0]);
+    if (!frame) return;
+
+    const center = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
+    const node = this.scene.node(ids[0]);
+
+    this.scene.history.begin('Döndür');
+    this._drag = {
+      kind: 'rotate', start: point, ids, center,
+      origin: node.rotation || 0,
+      grabAngle: angleOf(center, point),
+      moved: false
+    };
+  }
+
+  _updateRotate(event) {
+    const point = this._toPage(event);
+    const delta = angleOf(this._drag.center, point) - this._drag.grabAngle;
+    let next = this._drag.origin + delta;
+
+    // Shift: 15°lik adımlar. Serbest dönmede tam 90° tutturmak neredeyse
+    // imkânsızdır ve kullanıcı çoğunlukla tam açı ister.
+    if (event.shiftKey) next = Math.round(next / 15) * 15;
+
+    next = ((next % 360) + 360) % 360;
+    this.scene.updateNode(this._drag.ids[0], { rotation: this.units.round(next) });
+    this.render();
+  }
+
   _beginMarquee(point) {
     this._drag = { kind: 'marquee', start: point, moved: false };
     this.marquee.classList.remove('is-hidden');
   }
 
   _onPointerMove(event) {
+    if (event.pointerType === 'touch' && this._touches.has(event.pointerId)) {
+      this._touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (this._pinch) { this._updatePinch(); return; }
+    }
     if (!this._drag) return;
     const point = this._toPage(event);
     const dx = point.x - this._drag.start.x;
@@ -511,6 +655,7 @@ export class SceneCanvas {
     if (this._drag.kind === 'marquee') return this._updateMarquee(point);
     if (this._drag.kind === 'move') return this._updateMove(dx, dy, event);
     if (this._drag.kind === 'resize') return this._updateResize(dx, dy, event);
+    if (this._drag.kind === 'rotate') return this._updateRotate(event);
   }
 
   _updateMove(dx, dy, event) {
@@ -532,7 +677,9 @@ export class SceneCanvas {
       const others = this._siblingFrames(moving);
       const target = {
         x: primary.frame.x + offsetX, y: primary.frame.y + offsetY,
-        width: primary.frame.width, height: primary.frame.height
+        width: primary.frame.width, height: primary.frame.height,
+        // Dönme yapışmaya girer: görünen kenar, çerçevenin kenarı değildir.
+        rotation: primary.rotation || 0
       };
       const snapped = this.geometry.snap(target, others, this.scene.page, { threshold: 4 / this.zoom });
       offsetX += snapped.x - target.x;
@@ -608,7 +755,10 @@ export class SceneCanvas {
     this._drag.rect = { x, y, width, height };
   }
 
-  _onPointerUp() {
+  _onPointerUp(event) {
+    if (event && event.pointerId !== undefined) this._touches.delete(event.pointerId);
+    if (this._touches.size < 2) this._pinch = null;
+
     if (!this._drag) return;
     const drag = this._drag;
     this._drag = null;
@@ -776,6 +926,10 @@ function cssFontFamily(family) {
 }
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/** Merkezden noktaya giden vektörün açısı (derece, saat yönü). */
+const angleOf = (center, point) =>
+  (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
 
 /**
  * Yol komutlarını SVG `d` dizgesine çevirir.

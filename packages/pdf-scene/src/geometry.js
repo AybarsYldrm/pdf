@@ -331,24 +331,36 @@ function snap(frame, others, page, opts = {}) {
     xTargets.push(0, m.left, page.width - m.right, page.width, page.width / 2);
     yTargets.push(0, m.top, page.height - m.bottom, page.height, page.height / 2);
   }
+
+  // DÖNMÜŞ NESNEDE GÖRÜNEN KENAR, ÇERÇEVENİN KENARI DEĞİLDİR. Kullanıcı
+  // ekranda gördüğü kenarın yapışmasını bekler; dönmemiş çerçeveye göre
+  // hesaplamak, 45° dönmüş bir kutuda kılavuz çizgisiyle nesnenin gözle
+  // görülür biçimde ayrışması demektir.
   for (const o of others) {
+    const box = o.rotation ? rotatedBounds(o, o.rotation) : o;
     if (useEdges) {
-      xTargets.push(o.x, o.x + o.width);
-      yTargets.push(o.y, o.y + o.height);
+      xTargets.push(box.x, box.x + box.width);
+      yTargets.push(box.y, box.y + box.height);
     }
     if (useCenters) {
-      xTargets.push(o.x + o.width / 2);
-      yTargets.push(o.y + o.height / 2);
+      xTargets.push(box.x + box.width / 2);
+      yTargets.push(box.y + box.height / 2);
     }
   }
 
-  // Çerçevenin yapışabilecek kendi noktaları: sol kenar, merkez, sağ kenar
+  // Taşınan nesnenin kendi yapışma noktaları da GÖRÜNEN kutusundan alınır.
+  // Kaydırma dönmeden bağımsızdır (dönme merkez etrafındadır), bu yüzden
+  // bulunan fark doğrudan çerçeveye uygulanabilir.
+  const visible = frame.rotation ? rotatedBounds(frame, frame.rotation) : frame;
+  const dx0 = visible.x - frame.x;
+  const dy0 = visible.y - frame.y;
+
   const xSources = useCenters
-    ? [{ off: 0 }, { off: frame.width / 2 }, { off: frame.width }]
-    : [{ off: 0 }, { off: frame.width }];
+    ? [{ off: dx0 }, { off: dx0 + visible.width / 2 }, { off: dx0 + visible.width }]
+    : [{ off: dx0 }, { off: dx0 + visible.width }];
   const ySources = useCenters
-    ? [{ off: 0 }, { off: frame.height / 2 }, { off: frame.height }]
-    : [{ off: 0 }, { off: frame.height }];
+    ? [{ off: dy0 }, { off: dy0 + visible.height / 2 }, { off: dy0 + visible.height }]
+    : [{ off: dy0 }, { off: dy0 + visible.height }];
 
   const best = (sources, targets, base) => {
     let win = null;

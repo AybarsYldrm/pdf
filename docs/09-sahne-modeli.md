@@ -144,7 +144,9 @@ gördüğü yeri PDF'te de görmelidir.
 - `absoluteFrame` — grup kaymaları ve ata dönmeleri toplanır; düğümün
   **kendi** dönmesi `x/y`'ye karışmaz, ayrı alanda döner
 - `align` / `distribute` — yeni konumları **döndürür**, düğüme dokunmaz
-- `snap` — kenar, merkez ve sayfa kılavuzlarına yapışma + kılavuz çizgileri
+- `snap` — kenar, merkez ve sayfa kılavuzlarına yapışma + kılavuz çizgileri.
+  **Dönme hesaba katılır**: dönmüş bir nesnenin görünen kenarı çerçevesinin
+  kenarı değildir ve kullanıcı gördüğü kenarın yapışmasını bekler
 
 "Eşit aralıklı dağıtım" ile "eşit merkez mesafesi" farklıdır; farklı boyutlu
 nesnelerde gözle doğru görünen birincisidir ve uygulanan odur.
@@ -281,6 +283,9 @@ bir `dist` dosyası yoktur, dolayısıyla kaynakla ayrışamaz.
 | `Shift` + tutamak | En-boy oranını koru |
 | `Alt` + tık | Grubun içine gir |
 | `Delete` | Sil |
+| Dönme tutamağı (`Shift`) | 15°lik adımlarla döndür |
+| `Ctrl`/`⌘` + tekerlek | İmlecin altındaki nokta sabit kalarak yakınlaştır |
+| İki parmak | Yakınlaştır (dokunmatik) |
 
 ---
 
@@ -375,10 +380,8 @@ Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
   (yukarıdan aşağı, soldan sağa) varsayılır ve bu `WARN_READING_ORDER_GUESSED`
   ile bildirilir. Soldan sağa yazılmayan diller ve sütunlu düzenler için sıra
   kullanıcı tarafından verilmelidir.
-- **Döndürülmüş nesnelerde yapışma, dönmemiş çerçeveye göre hesaplanır.**
-  Küçük açılarda fark edilmez, büyük açılarda kılavuz ile görünen kenar
-  ayrışır.
-- **Editör dokunmatik/kalem girdisi için ayarlanmamıştır.** Pointer olayları
-  kullanılır ama tutamak boyutları fare için seçilmiştir.
+- **Dokunmatikte tek parmak KAYDIRIR, sürüklemez.** `touch-action: pan-x
+  pan-y` ile sayfayı gezmek tarayıcıya bırakılmıştır. İkinci parmak
+  değdiğinde yarım kalan sürükleme geri sarılır ve yakınlaştırma başlar.
 - **Eşzamanlı düzenleme yoktur.** Geri alma yığını ters işlem tabanlı olduğu
   için ileride eklenebilir; şu an tek kullanıcılıdır.

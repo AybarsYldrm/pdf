@@ -74,6 +74,11 @@ export class SceneEditor {
     });
 
     this.canvas.onSelectionChange = () => this.inspector.render();
+    // Tuval kendi başına da yakınlaşabilir (parmakla sıkıştırma, Ctrl+tekerlek);
+    // kutudaki sayı gerçeği göstermelidir.
+    this.canvas.onZoom = (zoom) => {
+      if (this._zoomInput) this._zoomInput.value = String(Math.round(zoom * 100));
+    };
     this.canvas.onChange = () => this._touched();
     this.canvas.onDoubleClick = (id) => this._editText(id);
     this.inspector.onChange = () => { this._touched(); this._renderPages(); };
@@ -201,10 +206,10 @@ export class SceneEditor {
       ]),
       el('label', { class: 'field field--inline' }, [
         el('span', { class: 'field__label', text: 'Yakınlık' }),
-        el('input', {
-          class: 'input input--num', type: 'number', min: 25, max: 400, step: 25, value: '100',
+        (this._zoomInput = el('input', {
+          class: 'input input--num', type: 'number', min: 15, max: 400, step: 25, value: '100',
           onchange: (e) => this.canvas.setZoom((Number(e.target.value) || 100) / 100)
-        })
+        }))
       ])
     ]));
   }

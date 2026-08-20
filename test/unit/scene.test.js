@@ -283,6 +283,45 @@ test('geometri: yapışma eşik içinde çalışır, dışında çalışmaz', ()
   assert.strictEqual(far.x, 240, 'eşik dışında konum değişmemeli');
 });
 
+test('geometri: yapışma DÖNMÜŞ nesnenin GÖRÜNEN kenarını kullanır', () => {
+  // 90° dönmüş 100×20'lik bir kutu ekranda 20×100 görünür: merkezi (250,300)
+  // olduğu için görünen sol kenarı 240'tır, çerçevenin `x`i olan 200 değil.
+  // Kullanıcı GÖRDÜĞÜ kenarın yapışmasını bekler.
+  const others = [{ x: 100, y: 0, width: 130, height: 400 }];   // sağ kenar 230
+  const rotated = { x: 200, y: 290, width: 100, height: 20, rotation: 90 };
+
+  const snapped = geometry.snap(rotated, others, null, { threshold: 12 });
+  const visible = geometry.rotatedBounds(
+    { x: snapped.x, y: snapped.y, width: 100, height: 20 }, 90);
+
+  assert.strictEqual(units.round(visible.x), 230, 'GÖRÜNEN sol kenar oturmalı');
+  assert.strictEqual(snapped.x, 190, 'çerçeve de aynı farkla kaymalı');
+
+  // Dönme yok sayılsaydı çerçeve kenarı 200, hedef 230 olurdu: 30 punto
+  // uzak, yani eşik dışında — hiç yapışmazdı.
+  const ignoringRotation = geometry.snap(
+    { x: 200, y: 290, width: 100, height: 20 }, others, null, { threshold: 12 });
+  assert.strictEqual(ignoringRotation.x, 200, 'dönmesiz kutu bu eşikte yapışmaz');
+});
+
+test('geometri: yapışma hedefi de dönmüş kutudan alınır', () => {
+  // Hedef nesne dönmüş: onun görünen kenarı da çerçevesinden farklıdır.
+  // Merkez (250,300) → görünen kenarlar 240 ve 260, merkez 250.
+  const others = [{ x: 200, y: 290, width: 100, height: 20, rotation: 90 }];
+  const moving = { x: 237, y: 500, width: 40, height: 20 };
+
+  const snapped = geometry.snap(moving, others, null, { threshold: 4 });
+  assert.strictEqual(snapped.x, 240, 'dönmüş hedefin görünen sol kenarı 240');
+});
+
+test('geometri: dönmemiş nesnede yapışma DAVRANIŞI DEĞİŞMEZ', () => {
+  // Dönme desteği eskisini bozmamalı.
+  const others = [{ x: 200, y: 100, width: 100, height: 50 }];
+  const snapped = geometry.snap({ x: 202, y: 300, width: 40, height: 20, rotation: 0 },
+    others, null, { threshold: 4 });
+  assert.strictEqual(snapped.x, 200);
+});
+
 test('geometri: ızgaraya yuvarlama', () => {
   assert.strictEqual(geometry.snapToGrid(13, 5), 15);
   assert.strictEqual(geometry.snapToGrid(12, 5), 10);

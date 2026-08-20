@@ -89,6 +89,14 @@
   outline: none;
   /* Sürükleme sırasında metin seçimi imleci titretir */
   user-select: none;
+  /*
+   * DOKUNMATİKTE SÜRÜKLEME İLE KAYDIRMA ÇAKIŞIR. `pan-x pan-y`, tek
+   * parmakla kaydırmayı tarayıcıya bırakır ama ÇİFT parmağı (yakınlaştırma)
+   * bize verir. `none` yazmak kaydırmayı da öldürürdü: A4 sayfa küçük bir
+   * ekrana sığmaz ve kullanıcı belgenin altını hiç göremezdi.
+   */
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .sc-sheet {
@@ -198,6 +206,58 @@
   border: 1px solid var(--accent, #1f3a63);
   border-radius: 1px;
   pointer-events: auto;
+  touch-action: none;          /* tutamağın kendisi kaydırma yapmaz */
+}
+
+/*
+ * DOKUNMATİKTE HEDEF BÜYÜR, GÖRÜNTÜ BÜYÜMEZ.
+ *
+ * 8 pikselik bir kare parmakla tutulamaz (önerilen en küçük hedef ~24 px).
+ * Görsel boyutu büyütmek tutamakları nesnenin üstüne taşırdı; bunun yerine
+ * görünmez bir hedef alanı eklenir.
+ */
+@media (pointer: coarse) {
+  .sc-handle::after {
+    content: '';
+    position: absolute;
+    inset: -9px;               /* 8 + 2×9 = 26 px dokunma hedefi */
+  }
+}
+
+/** Dönme tutamağı — seçimin ÜSTÜNDE, kutunun dışında durur. */
+.sc-rotate {
+  position: absolute;
+  left: 50%;
+  top: -22px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  background: #fff;
+  border: 1px solid var(--accent, #1f3a63);
+  border-radius: 50%;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sc-rotate::before {
+  /* Kutuya bağlayan çizgi: tutamağın neye ait olduğu belli olsun */
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 1px;
+  height: 10px;
+  margin-left: -0.5px;
+  background: var(--accent, #1f3a63);
+}
+
+@media (pointer: coarse) {
+  .sc-rotate::after {
+    content: '';
+    position: absolute;
+    inset: -7px;
+  }
 }
 
 .sc-handle--nw { left: 0;    top: 0;    cursor: nwse-resize; }
