@@ -47,6 +47,7 @@ packages/
 ├── stamp/      @fitfak/stamp      slot tabanlı görsel damga motoru
 ├── pdf-html/   @fitfak/pdf-html   HTML + CSS → PDF derleyicisi
 ├── pdf-doc/    @fitfak/pdf-doc    mevcut PDF'i okuma/düzenleme (xref stream, ObjStm)
+├── pdf-scene/  @fitfak/pdf-scene  serbest yerleşimli sahne modeli + görsel editör çekirdeği
 ├── paper/      @fitfak/paper      baskıya öncelikli CSS tasarım sistemi
 ├── verify/     @fitfak/verify     imza doğrulama + ETSI raporu
 └── conformance/ @fitfak/conformance  PDF/A + PDF/UA denetimi
@@ -229,10 +230,13 @@ kök) · sunucu API'si · iki fazlı imzalama · CLI.
 | [docs/05-web-studio.md](docs/05-web-studio.md) | Arayüz tasarımı ve API sözleşmesi |
 | [docs/06-yol-haritasi.md](docs/06-yol-haritasi.md) | Fazlar, kabul kriterleri, risk kaydı |
 | [docs/07-cli.md](docs/07-cli.md) | Komut satırı arayüzü — her komut, seçenek ve çıkış kodu |
+| [docs/08-guvenlik.md](docs/08-guvenlik.md) | Güvenlik denetimi: bulgular, düzeltmeler, regresyon testleri, kabul edilmiş sınırlar |
+| [docs/09-sahne-modeli.md](docs/09-sahne-modeli.md) | Sahne modeli, geometri, varlık sistemi, görsel editör |
 
 Paket README'leri: [pkcs12](packages/pkcs12/README.md) ·
 [stamp](packages/stamp/README.md) · [pdf-html](packages/pdf-html/README.md) ·
-[pdf-doc](packages/pdf-doc/README.md) · [paper](packages/paper/README.md) ·
+[pdf-doc](packages/pdf-doc/README.md) · [pdf-scene](packages/pdf-scene/README.md) ·
+[paper](packages/paper/README.md) ·
 [verify](packages/verify/README.md) · [conformance](packages/conformance/README.md)
 
 Uyumluluk raporu: [docs/conformance/RAPOR.md](docs/conformance/RAPOR.md)
