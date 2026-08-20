@@ -40,6 +40,14 @@ class Scene {
     /** @type {Set<string>} seçili düğüm kimlikleri */
     this.selection = new Set();
     this._listeners = new Set();
+    /**
+     * İşlem kaydedici — ortak düzenleme için.
+     *
+     * Kurulmuşsa her değişiklik SERİLEŞTİRİLEBİLİR bir işleme çevrilip
+     * buraya verilir. Geri alma yığını kapanış tutar ve ağdan geçmez;
+     * ağdan geçen şey bu işlemlerdir (bkz. ops.js).
+     */
+    this._recorder = null;
   }
 
   /* ---------------------------------------------------------------- */
@@ -178,6 +186,26 @@ class Scene {
     return result;
   }
 
+  /**
+   * İşlem kaydediciyi kurar.
+   *
+   * `null` verilerek kapatılır. UZAKTAN gelen işlemler uygulanırken
+   * kapatılmalıdır: yoksa gelen işlem geri gönderilir ve iki istemci
+   * sonsuza dek birbirine aynı değişikliği yollar.
+   */
+  recordOps(fn) { this._recorder = fn; }
+
+  _record(op) {
+    if (this._recorder) this._recorder(op);
+  }
+
+  /** Sayfanın tamamını işlem olarak kaydeder (gruplama gibi toptan işler). */
+  _recordPage(page) {
+    if (this._recorder && page) {
+      this._recorder({ op: 'replacePage', pageId: page.id, nodes: clone(page.nodes) });
+    }
+  }
+
   /** Bir adımı uygular ve tersini kaydeder. */
   _step(apply, revert) {
     if (!this.history.isOpen) {
@@ -187,16 +215,60 @@ class Scene {
     this.history.record(apply, revert);
   }
 
+  /**
+   * GERİ ALMA VE ORTAK DÜZENLEME.
+   *
+   * Geri alma, kaydedilmiş TERS İŞLEMLERİ doğrudan çalıştırır; sahne
+   * yöntemlerinden geçmez, dolayısıyla kendiliğinden işlem üretmez. Ortak
+   * oturumda bu, geri alanın belgesiyle diğerlerininkinin ayrışması
+   * demektir.
+   *
+   * Çözüm: geri alma/yineleme sonrası DEĞİŞEN sayfalar toptan bildirilir.
+   * Bedeli açıktır ve gizlenmiyor: aynı sayfada aynı anda çalışan birinin
+   * son değişikliği bu yazımla kaybolabilir. Geri alma seyrek ve bilinçli
+   * bir eylemdir; sessizce ayrışmış iki belge ise fark edilene kadar
+   * büyüyen bir hatadır.
+   */
   undo() {
-    const tx = this.history.undo();
-    if (tx) this._emit({ type: 'undo', label: tx.label });
-    return tx;
+    return this._timeTravel(() => this.history.undo(), 'undo');
   }
 
   redo() {
-    const tx = this.history.redo();
-    if (tx) this._emit({ type: 'redo', label: tx.label });
+    return this._timeTravel(() => this.history.redo(), 'redo');
+  }
+
+  _timeTravel(run, kind) {
+    const before = this._recorder ? this._snapshot() : null;
+    const tx = run();
+    if (!tx) return tx;
+
+    if (before) {
+      for (const page of this.doc.pages) {
+        const previous = before.pages.get(page.id);
+        const current = JSON.stringify(page.nodes);
+        // Sayfa yeni ortaya çıktıysa ya da içeriği değiştiyse bildirilir.
+        if (previous !== current) {
+          this._record({ op: 'replacePage', pageId: page.id, nodes: clone(page.nodes) });
+        }
+      }
+      if (before.meta !== JSON.stringify(this.doc.meta)) {
+        this._record({ op: 'setMeta', meta: clone(this.doc.meta) });
+      }
+      if (before.page !== JSON.stringify(this.doc.page)) {
+        this._record({ op: 'setPage', page: clone(this.doc.page) });
+      }
+    }
+
+    this._emit({ type: kind, label: tx.label });
     return tx;
+  }
+
+  _snapshot() {
+    return {
+      pages: new Map(this.doc.pages.map((p) => [p.id, JSON.stringify(p.nodes)])),
+      meta: JSON.stringify(this.doc.meta),
+      page: JSON.stringify(this.doc.page)
+    };
   }
 
   /* ---------------------------------------------------------------- */
@@ -256,6 +328,10 @@ class Scene {
         if (i >= 0) target.list.splice(i, 1);
       }
     );
+    this._record({
+      op: 'addNode', node: clone(inserted),
+      pageId: where.pageId, parentId: where.parentId, index: where.index
+    });
     return inserted;
   }
 
@@ -269,6 +345,7 @@ class Scene {
       () => list.splice(Math.min(index, list.length), 0, node)
     );
     this.selection.delete(nodeId);
+    this._record({ op: 'removeNode', nodeId });
     return node;
   }
 
@@ -307,6 +384,7 @@ class Scene {
         }
       }
     );
+    this._record({ op: 'updateNode', nodeId, patch: clone(after) });
     return node;
   }
 
@@ -345,6 +423,7 @@ class Scene {
       () => { list.splice(list.indexOf(node), 1); list.splice(target, 0, node); },
       () => { list.splice(list.indexOf(node), 1); list.splice(index, 0, node); }
     );
+    this._record({ op: 'reorder', nodeId, to: target });
     return node;
   }
 
@@ -404,6 +483,10 @@ class Scene {
       }
     );
 
+    // Gruplama düğüm ağacını TOPTAN yeniden kurar; ortak düzenlemede
+    // bunu tek bir `replacePage` olarak taşımak, aradaki her ara durumun
+    // geçerli olmasını beklemekten sağlamdır.
+    this._recordPage(page);
     this.selection = new Set([group.id]);
     return group;
   }
@@ -439,6 +522,7 @@ class Scene {
       }
     );
 
+    this._recordPage(hit.page);
     this.selection = new Set(children.map((c) => c.id));
     return children;
   }
@@ -460,6 +544,7 @@ class Scene {
       () => this.doc.pages.splice(index, 0, page),
       () => { const i = this.doc.pages.indexOf(page); if (i >= 0) this.doc.pages.splice(i, 1); }
     );
+    this._record({ op: 'addPage', options: { ...opts, id: page.id, name: page.name, index } });
     return page;
   }
 
@@ -474,6 +559,7 @@ class Scene {
       () => { const i = this.doc.pages.indexOf(page); if (i >= 0) this.doc.pages.splice(i, 1); },
       () => this.doc.pages.splice(Math.min(index, this.doc.pages.length), 0, page)
     );
+    this._record({ op: 'removePage', pageId });
     return page;
   }
 
@@ -488,6 +574,85 @@ class Scene {
       () => { this.doc.pages.splice(from, 1); this.doc.pages.splice(to, 0, page); },
       () => { this.doc.pages.splice(to, 1); this.doc.pages.splice(from, 0, page); }
     );
+    this._record({ op: 'movePage', pageId, index: to });
+    return page;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Belge düzeyi                                                      */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Belge üst verisini günceller (başlık, dil, yazar…).
+   *
+   * Yalnız ŞEMADA olan alanlar yazılır: `doc.meta`ya serbest anahtar
+   * eklemek, doğrulamadan geçmeyen bir belge üretirdi.
+   */
+  setMeta(patch) {
+    return this._merge(this.doc.meta, patch,
+      ['title', 'author', 'subject', 'lang', 'keywords'], 'Belge bilgisi');
+  }
+
+  /** Sayfa geometrisini günceller (boyut, yön, kenar boşluğu). */
+  setPage(patch) {
+    return this._merge(this.doc.page, patch,
+      ['size', 'orientation', 'width', 'height', 'margin'], 'Sayfa düzeni');
+  }
+
+  /** Ortak birleştirme: eski değerleri saklayıp geri alınabilir yazar. */
+  _merge(target, patch, allowed, label) {
+    if (!patch || typeof patch !== 'object') return target;
+
+    const before = {};
+    const after = {};
+    let changed = false;
+
+    for (const key of allowed) {
+      if (patch[key] === undefined) continue;
+      const next = key === 'margin' && patch.margin && typeof patch.margin === 'object'
+        ? { ...target.margin, ...patch.margin }
+        : patch[key];
+      if (JSON.stringify(target[key]) === JSON.stringify(next)) continue;
+      before[key] = clone(target[key]);
+      after[key] = clone(next);
+      changed = true;
+    }
+    if (!changed) return target;
+
+    this._step(
+      () => Object.assign(target, clone(after)),
+      () => {
+        for (const [k, v] of Object.entries(before)) {
+          if (v === undefined) delete target[k];
+          else target[k] = clone(v);
+        }
+      }
+    );
+    this._record(target === this.doc.meta
+      ? { op: 'setMeta', meta: clone(after) }
+      : { op: 'setPage', page: clone(after) });
+    return target;
+  }
+
+  /**
+   * Sayfanın düğüm listesini TOPTAN değiştirir.
+   *
+   * Gruplama ve grup çözme, düğüm ağacını tek adımda yeniden kurar;
+   * bunu "şu düğümü ekle, şunu çıkar" dizisine bölmek, aradaki her ara
+   * durumun geçerli olmasını gerektirirdi. Ortak düzenlemede bu işlem
+   * TEK bir `replacePage` olarak taşınır.
+   */
+  replacePageNodes(pageId, nodes) {
+    const page = this.pageById(pageId);
+    if (!page) return null;
+    const before = clone(page.nodes);
+    const after = clone(nodes);
+
+    this._step(
+      () => { page.nodes = clone(after); },
+      () => { page.nodes = clone(before); }
+    );
+    this._record({ op: 'replacePage', pageId, nodes: clone(after) });
     return page;
   }
 

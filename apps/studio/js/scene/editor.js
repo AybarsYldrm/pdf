@@ -14,6 +14,7 @@
 import { el, clear, $ } from '../lib/dom.js';
 import { SceneCanvas } from './canvas.js';
 import { Inspector } from './inspector.js';
+import { CollabClient } from './collab.js';
 
 /** Yeni nesnelerin varsayılan ölçüleri (punto). */
 const PRESETS = {
@@ -44,6 +45,15 @@ export class SceneEditor {
     this.assets = new Map(); // assetId → { meta, bytes(Uint8Array), url }
     this.dirty = false;
     this.lastPdf = null;
+
+    /**
+     * Ortak düzenleme.
+     *
+     * Kapalıyken hiçbir maliyeti yoktur: kaydedici kurulmaz, istek gitmez.
+     * Açıldığında sahnenin ürettiği işlemler sunucuya, sunucudan gelenler
+     * sahneye akar.
+     */
+    this.collab = null;
   }
 
   /* ---------------------------------------------------------------- */
@@ -82,6 +92,14 @@ export class SceneEditor {
     this.canvas.onChange = () => this._touched();
     this.canvas.onDoubleClick = (id) => this._editText(id);
     this.inspector.onChange = () => { this._touched(); this._renderPages(); };
+
+    this.collab = new CollabClient({
+      api: this.opts.api,
+      onRemote: (ops) => this._applyRemote(ops),
+      onPeers: (peers) => this._renderPeers(peers),
+      onStatus: (message, kind) => this._status(message, kind),
+      onConflict: (overwritten) => this._reportConflict(overwritten)
+    });
 
     this._buildToolbar();
     this._bindClipboard();
@@ -204,6 +222,17 @@ export class SceneEditor {
           onchange: (e) => { this.canvas.gridStep = Math.max(0, Number(e.target.value) || 0); }
         })
       ]),
+      (this._shareBtn = el('button', {
+        class: 'btn btn--sm', type: 'button', text: 'Paylaş',
+        title: 'Belgeyi ortak düzenlemeye aç',
+        onclick: () => this._toggleShare()
+      })),
+      el('button', {
+        class: 'btn btn--sm', type: 'button', text: 'Katıl',
+        title: 'Var olan bir ortak oturuma katıl',
+        onclick: () => this._promptJoin()
+      }),
+      (this._peersEl = el('span', { class: 'sc-peers' })),
       el('label', { class: 'field field--inline' }, [
         el('span', { class: 'field__label', text: 'Yakınlık' }),
         (this._zoomInput = el('input', {
@@ -212,6 +241,31 @@ export class SceneEditor {
         }))
       ])
     ]));
+  }
+
+  async _toggleShare() {
+    try {
+      if (this.collab.active) return await this.unshareDocument();
+      const name = window.prompt('Adınız (katılımcı listesinde görünecek):', 'Katılımcı');
+      if (name === null) return;
+      const id = await this.shareDocument(name);
+      // Kimlik kopyalanabilir olmalı: kullanıcı bunu karşı tarafa iletecek.
+      window.prompt('Oturum kimliği (karşı tarafa iletin):', id);
+    } catch (err) {
+      this._status(`Paylaşım açılamadı: ${err.message}`, 'err');
+    }
+  }
+
+  async _promptJoin() {
+    const id = window.prompt('Oturum kimliği:');
+    if (!id) return;
+    const name = window.prompt('Adınız:', 'Katılımcı');
+    if (name === null) return;
+    try {
+      await this.joinDocument(id.trim(), name);
+    } catch (err) {
+      this._status(`Oturuma katılınamadı: ${err.message}`, 'err');
+    }
   }
 
   _renderPages() {
@@ -418,6 +472,83 @@ export class SceneEditor {
       }
     }
     this.canvas.render();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Ortak düzenleme                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Sahneyi ortak oturuma bağlar.
+   *
+   * Sahnenin ürettiği işlemler kaydediciye düşer ve oradan sunucuya gider.
+   * `suspended` bayrağı, UZAKTAN gelen bir işlemi uygularken üretilen
+   * işlemlerin geri gönderilmesini engeller — yoksa iki istemci aynı
+   * değişikliği sonsuza dek birbirine yollardı.
+   */
+  _bindCollab() {
+    if (!this.scene) return;
+    this.scene.recordOps((op) => this.collab.send([op]));
+  }
+
+  async shareDocument(name) {
+    await this.collab.start(this.scene.toJSON(), name);
+    this._bindCollab();
+    this._renderPeers(this.collab.peers);
+    return this.collab.sessionId;
+  }
+
+  async joinDocument(sessionId, name) {
+    const res = await this.collab.join(sessionId, name);
+
+    // Katılan taraf SUNUCUDAKİ belgeyi alır: yerel belgeyi korumak, iki
+    // ayrı belgenin aynı oturumda düzenlenmesi demek olurdu.
+    this._releaseAssets();
+    const scene = this.lib.Scene.fromJSON(res.scene);
+    this.canvas.attach(scene);
+    this._bindCollab();
+    this._refreshAll();
+    return res;
+  }
+
+  async unshareDocument() {
+    if (this.scene) this.scene.recordOps(null);
+    await this.collab.stop();
+    this._renderPeers([]);
+  }
+
+  /** Uzak işlemleri uygular — GERİ ALMA YIĞINI TEMİZ KALIR. */
+  _applyRemote(ops) {
+    if (!this.scene || !ops.length) return;
+    const depth = this.scene.history.undoStack.length;
+
+    try {
+      this.lib.applyOps(this.scene, ops, 'Uzak değişiklik');
+    } catch (err) {
+      this._status(`Uzak değişiklik uygulanamadı: ${err.message}`, 'err');
+      return;
+    }
+
+    // Başkasının yazdığını Ctrl+Z ile geri almak en şaşırtıcı davranıştır.
+    this.scene.history.undoStack.length = depth;
+    this._refreshAll();
+  }
+
+  _renderPeers(peers) {
+    if (!this._peersEl) return;
+    this._peersEl.textContent = peers.length
+      ? `${peers.length} kişi: ${peers.map((p) => p.name).join(', ')}`
+      : '';
+    if (this._shareBtn) {
+      this._shareBtn.textContent = this.collab.active ? 'Paylaşımı bitir' : 'Paylaş';
+    }
+  }
+
+  _reportConflict(overwritten) {
+    const ids = [...new Set(overwritten.map((o) => o.op.nodeId || o.op.op))];
+    this._status(
+      `Değişikliğiniz başkasının düzenlemesinin üzerine yazıldı (${ids.join(', ')})`,
+      'warn');
   }
 
   /* ---------------------------------------------------------------- */

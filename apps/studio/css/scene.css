@@ -42,6 +42,16 @@
 
 .sc-tools--right { margin-left: auto; }
 
+/** Ortak oturumdaki katılımcılar. */
+.sc-peers {
+  font-size: 11px;
+  color: var(--muted, #8b93a7);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sc-tools__file {
   cursor: pointer;
   display: inline-flex;

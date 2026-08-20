@@ -72,6 +72,13 @@ export const api = {
                         { pdf: toBase64(pdfBytes), password: password || undefined }),
   sceneImportHtml:  (payload) => request('/api/scene/import/html', payload),
 
+  /* Ortak düzenleme */
+  collabCreate:  (scene, name) => request('/api/collab/create', { scene, name }),
+  collabJoin:    (sessionId, name) => request('/api/collab/join', { sessionId, name }),
+  collabOps:     (payload) => request('/api/collab/ops', payload),
+  collabLeave:   (sessionId, clientId) =>
+                   request('/api/collab/leave', { sessionId, clientId }),
+
   pfxIdentities: (pfxBytes, password) =>
                    request('/api/pfx/identities', { pfx: toBase64(pfxBytes), password }),
   signPrepare:   (payload) => request('/api/sign/prepare', payload),

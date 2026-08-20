@@ -33,6 +33,7 @@ const conformance = require('@fitfak/conformance');
 const scene = require('@fitfak/pdf-scene');
 const { Registry, documentHash, recordFromReport } = require('@fitfak/registry');
 const policy = require('./src/policy');
+const { Collab } = require('./src/collab');
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
@@ -129,6 +130,15 @@ async function recordSignature(pdf, o = {}) {
     return null;
   }
 }
+
+/**
+ * Eşzamanlı düzenleme oturumları.
+ *
+ * Sunucu SIRALAR, herkes o sırayı uygular. Oturumlar yalnız bellektedir:
+ * sunucu yeniden başlarsa oturum kaybolur, belge kaybolmaz — her
+ * istemcinin kendi kopyası vardır.
+ */
+const collab = new Collab();
 
 /* ------------------------------------------------------------------ */
 /* Font kayıt defteri                                                   */
@@ -325,6 +335,7 @@ const routes = {
       // geçerli olduğu da bilinmelidir.
       // Defter açık mı, zinciri sağlam mı? "Doğrulama var" demek yetmez.
       registry: registry.describe(),
+      collab: collab.describe(),
       rateLimit: {
         windowMs: policy.RATE.windowMs,
         maxRequests: policy.RATE.maxRequests,
@@ -459,6 +470,103 @@ const routes = {
       manifest: result.manifest,
       warnings: result.warnings,
       conformance: result.conformance || null
+    });
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* Ortak düzenleme                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /** Yeni ortak oturum açar; açan kişi ilk katılımcıdır. */
+  'POST /api/collab/create': async (req, res) => {
+    const body = await readJson(req);
+    const { session, client } = collab.create(body.scene, body.name);
+    sendJson(res, 200, {
+      sessionId: session.id,
+      clientId: client.clientId,
+      version: session.version,
+      scene: session.scene.toJSON()
+    });
+  },
+
+  /** Var olan oturuma katılır ve belgenin SON hâlini alır. */
+  'POST /api/collab/join': async (req, res) => {
+    const body = await readJson(req);
+    const client = collab.join(body.sessionId, body.name);
+    const session = collab.get(body.sessionId);
+    sendJson(res, 200, {
+      ...client,
+      scene: session.scene.toJSON(),
+      peers: session.describe().peers
+    });
+  },
+
+  /**
+   * İşlemleri gönderir.
+   *
+   * `baseVersion` istemcinin GÖRDÜĞÜ son sürümdür. Arada başkasının
+   * yaptığı çakışan bir değişiklik varsa işlem yine uygulanır (son gelen
+   * kazanır) ama `overwritten` ile bildirilir: kullanıcı neyin üzerine
+   * yazdığını bilmelidir.
+   */
+  'POST /api/collab/ops': async (req, res) => {
+    const body = await readJson(req);
+    const session = collab.get(body.sessionId);
+    const result = session.commit(
+      String(body.clientId || ''), Number(body.baseVersion) || 0, body.ops);
+    sendJson(res, 200, result);
+  },
+
+  /** Oturumdan ayrılır (sekme kapanınca `sendBeacon` ile de çağrılabilir). */
+  'POST /api/collab/leave': async (req, res) => {
+    const body = await readJson(req);
+    collab.leave(String(body.sessionId || ''), String(body.clientId || ''));
+    sendJson(res, 200, { ok: true });
+  },
+
+  /**
+   * Olay akışı (SSE).
+   *
+   * WebSocket değil: tek yönlü bir akış yeterlidir (istemci → sunucu
+   * yolu zaten POST'tur) ve SSE düz `node:http` ile çalışır, ek bağımlılık
+   * ve el sıkışma protokolü gerektirmez.
+   */
+  'GET /api/collab/stream': async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const sessionId = url.searchParams.get('sessionId') || '';
+    const clientId = url.searchParams.get('clientId') || '';
+    const since = Number(url.searchParams.get('since')) || 0;
+
+    const session = collab.get(sessionId);
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      ...SECURITY_HEADERS
+    });
+
+    collab.attach(sessionId, clientId, res);
+
+    // Bağlantı koptuğu sırada kaçırılan işlemler: istemci `since` ile
+    // nerede kaldığını söyler ve aradaki her şeyi alır.
+    const missed = session.since(since);
+    if (missed.length) {
+      res.write(`data: ${JSON.stringify({
+        type: 'ops', version: session.version,
+        clientId: null, ops: missed.map((e) => e.op)
+      })}\n\n`);
+    }
+
+    // Ara vuruş: bazı vekiller sessiz bağlantıyı kapatır.
+    const beat = setInterval(() => {
+      try { res.write(': ping\n\n'); } catch { /* kopmuş */ }
+    }, 25_000);
+    if (beat.unref) beat.unref();
+
+    req.on('close', () => {
+      clearInterval(beat);
+      collab.leave(sessionId, clientId);
     });
   },
 
@@ -1306,4 +1414,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { createServer, start, CONFIG, routes, policy, rateLimiter };
+module.exports = { createServer, start, CONFIG, routes, policy, rateLimiter, collab, registry };

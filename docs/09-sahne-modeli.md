@@ -324,13 +324,46 @@ sonrasında saydamlık korunur.
 
 ---
 
-## 10. Sunucu uçları
+## 10. Ortak düzenleme
+
+**SUNUCU SIRALAR, HERKES O SIRAYI UYGULAR.**
+
+Geri alma yığını kapanış (closure) tutar ve ağdan geçmez. Ortak düzenleme
+için değişikliğin KENDİSİ veri olmalıdır: `src/ops.js` serileştirilebilir
+işlemleri tanımlar (`addNode`, `removeNode`, `updateNode`, `reorder`,
+`replacePage`, `addPage`, `removePage`, `movePage`, `setMeta`, `setPage`).
+
+`scene.recordOps(fn)` kurulduğunda her değişiklik bir işleme çevrilip
+`fn`e verilir. Gruplama gibi ağacı toptan kuran işler tek bir
+`replacePage` olarak taşınır: "şunu ekle, şunu çıkar" dizisine bölmek,
+aradaki her ara durumun geçerli olmasını gerektirirdi.
+
+| Durum | Davranış |
+| --- | --- |
+| Silinmiş düğüme dokunma | **Reddedilir** (`ERR_OP_MISSING`, HTTP 409) — hayalet nesneyi geri getirmek, kullanıcının sildiğini geri almaktır |
+| Var olan kimlikle ekleme | **Reddedilir** (`ERR_OP_DUPLICATE_ID`) |
+| Aynı alana iki kişi | Son gelen kazanır; gönderene `overwritten` ile **bildirilir** |
+| Farklı alanlara iki kişi | Çakışma sayılmaz (biri rengi, diğeri konumu değiştirebilir) |
+| Grup içinde bir işlem başarısız | **Hepsi geri sarılır** — yarım uygulanmış grup, sunucuyla istemciyi ayrıştırır |
+| Bağlantı koptu | İstemci `since` ile nerede kaldığını söyler, aradaki işlemler yetişir |
+
+Uzaktan gelen işlem **geri alma yığınına girmez**: başkasının yazdığını
+Ctrl+Z ile geri almak en şaşırtıcı davranıştır.
+
+Taşıma SSE'dir (WebSocket değil): istemci → sunucu yolu zaten POST'tur,
+tek yönlü bir akış yeterlidir ve düz `node:http` ile çalışır.
+
+---
+
+## 11. Sunucu uçları
 
 | Uç | İş |
 |---|---|
 | `POST /api/scene/render` | Sahne → PDF + imza yuvası manifesti |
 | `POST /api/scene/import/pdf` | PDF → sahne |
 | `POST /api/scene/import/html` | HTML → sahne |
+| `POST /api/collab/create` · `join` · `ops` · `leave` | Ortak oturum |
+| `GET /api/collab/stream` | Olay akışı (SSE) |
 | `GET /vendor/scene.esm.js` | Tarayıcı paketi (anında üretilir) |
 
 Varlık baytları sahnenin **dışında**, ayrı bir dizide taşınır: on yerde
@@ -342,7 +375,7 @@ uçları mevcut gövde/sayım sınırlarına ve hız sınırına tabidir.
 
 ---
 
-## 11. Bilinen sınırlar
+## 12. Bilinen sınırlar
 
 Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
 
@@ -383,5 +416,13 @@ Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
 - **Dokunmatikte tek parmak KAYDIRIR, sürüklemez.** `touch-action: pan-x
   pan-y` ile sayfayı gezmek tarayıcıya bırakılmıştır. İkinci parmak
   değdiğinde yarım kalan sürükleme geri sarılır ve yakınlaştırma başlar.
-- **Eşzamanlı düzenleme yoktur.** Geri alma yığını ters işlem tabanlı olduğu
-  için ileride eklenebilir; şu an tek kullanıcılıdır.
+- **Eşzamanlı düzenleme CRDT DEĞİLDİR.** Sunucu sıralar, herkes o sırayı
+  uygular. Aynı alanı iki kişi değiştirirse son gelen kazanır ve önceki
+  sahibine "üzerine yazıldı" denir; otomatik birleştirme yoktur.
+- **Ortak oturumda GERİ ALMA sayfayı toptan yazar.** Geri alma ters
+  işlemleri doğrudan çalıştırır ve kendiliğinden işlem üretmez; ayrışmayı
+  önlemek için değişen sayfa bütünüyle bildirilir. Aynı sayfada aynı anda
+  çalışan birinin son değişikliği bu yazımla kaybolabilir.
+- **Oturumlar yalnız BELLEKTEDİR.** Sunucu yeniden başlarsa oturum kaybolur;
+  belge kaybolmaz — her istemcinin kendi kopyası vardır ve dışa
+  aktarılabilir.

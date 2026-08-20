@@ -23,7 +23,7 @@ const path = require('path');
 const { SHIM_SOURCE } = require('./src/browser/shim');
 
 /** Bağımlılık sırasına göre — sonrakiler öncekilere gönderebilir. */
-const MODULES = ['units', 'schema', 'validate', 'geometry', 'history', 'assets', 'scene'];
+const MODULES = ['units', 'schema', 'validate', 'geometry', 'history', 'assets', 'scene', 'ops'];
 
 /**
  * Paket dışından alınan SAF modüller.
@@ -58,7 +58,8 @@ const EXPORTS = {
   './schema': ['SCHEMA_VERSION', 'PAGE_SIZES', 'NODE_TYPES', 'LIMITS',
                'STRUCT_ROLES', 'DEFAULT_ROLE'],
   './assets': ['AssetManager', 'AssetError', 'sniff'],
-  './history': ['History']
+  './history': ['History'],
+  './ops': ['applyOps', 'applyOp', 'checkOp', 'overlaps', 'OpError']
 };
 
 /** Ad alanı olarak açılanlar (`geometry.align(...)` gibi). */
