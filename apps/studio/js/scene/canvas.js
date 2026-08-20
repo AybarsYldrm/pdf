@@ -269,7 +269,9 @@ export class SceneCanvas {
       case 'signature':
         box.appendChild(el('div', { class: 'sc-slot' }, [
           el('span', { class: 'sc-slot__label', text: node.label || 'İmza' }),
-          node.role ? el('span', { class: 'sc-slot__role', text: node.role }) : null
+          node.signerTitle
+            ? el('span', { class: 'sc-slot__role', text: node.signerTitle })
+            : null
         ]));
         break;
 

@@ -68,7 +68,12 @@ tarafında hiçbir şey değişmedi.
 ### Düğüm tipleri
 
 Her düğümde ortak alanlar: `id`, `type`, `name`, `frame {x,y,width,height}`,
-`rotation`, `opacity`, `locked`, `hidden`.
+`rotation`, `opacity`, `locked`, `hidden` ve erişilebilirlik alanları
+`role` (PDF/UA yapı rolü), `alt`, `lang` (bkz. §9).
+
+İmza yuvasındaki imzalayan unvanı `signerTitle`dır; `role` her düğümde
+**yapı rolü** anlamına gelir. Eski belgelerdeki serbest metinli
+`signature.role` sessizce yutulmaz, `ERR_RENAMED_FIELD` ile reddedilir.
 
 | Tip | Tipe özgü alanlar |
 |---|---|
@@ -76,9 +81,9 @@ Her düğümde ortak alanlar: `id`, `type`, `name`, `frame {x,y,width,height}`,
 | `rect` | `fill`, `stroke`, `strokeWidth`, `radius` |
 | `ellipse` | `fill`, `stroke`, `strokeWidth` |
 | `line` | `stroke`, `strokeWidth`, `dash` — çerçevenin köşegeni üzerinde tanımlıdır |
-| `image` | `assetId`, `fit` (contain/cover/fill), `alt` |
+| `image` | `assetId`, `fit` (contain/cover/fill) |
 | `qr` | `payload`, `ecc`, `quiet`, `dark`, `light` |
-| `signature` | `fieldName`, `signer`, `role`, `label`, `showFrame` |
+| `signature` | `fieldName`, `signer`, `signerTitle`, `label`, `showFrame` |
 | `group` | `children[]` — çocuk koordinatları **grubun sol üstüne göredir** |
 
 `runs[]`, zengin metin içindir: her koşu kendi `bold`/`italic`/`color`/
@@ -253,7 +258,42 @@ bir `dist` dosyası yoktur, dolayısıyla kaynakla ayrışamaz.
 
 ---
 
-## 9. Sunucu uçları
+## 9. Erişilebilirlik ve arşiv uyumu (PDF/UA, PDF/A)
+
+`compileToPdf(scene, { conformance: 'pdf/a-2b+pdf/ua' })` sahne yolunda da
+etiketli, arşivlenebilir belge üretir. Yazılanlar: `pdfaid`/`pdfuaid` XMP
+iddiası, sRGB çıktı amacı, `MarkInfo`, `StructTreeRoot` + `ParentTree`,
+sayfa başına `StructParents` ve içerik akışında `BDC`/`EMC` işaretleri.
+
+**Serbest yerleşimde okuma sırası kendiliğinden oluşmaz.** Akış belgesinde
+"önce yazılan önce okunur"; sahnede kullanıcı nesneleri istediği sırayla
+ekler ve en son eklediği başlık listenin sonunda durur. Çizim sırasını okuma
+sırası saymak, ekran okuyucunun belgeyi tersten okuması demektir. Bu yüzden:
+
+| Kaynak | Davranış |
+| --- | --- |
+| `page.readingOrder: ['h1','p1',…]` | Kullanıcının verdiği sıra kullanılır |
+| Verilmediyse | Görsel sıra (satırlara böl → yukarıdan aşağı, satır içinde soldan sağa) hesaplanır ve `WARN_READING_ORDER_GUESSED` bildirilir |
+| Sırada eksik düğüm | Sona eklenir, `WARN_READING_ORDER_INCOMPLETE` bildirilir |
+
+Rol, düğümdeki `role` alanında taşınır. Ekran okuyucu **punto göremez**:
+22 punto bir metnin başlık olduğunu ancak kullanıcı söyleyebilir. `auto`
+tipe göre çözülür (`text` → `P`, `image`/`qr` → `Figure`, süs nesneleri →
+`artifact`) ve tablo şemadaki `DEFAULT_ROLE`tur — editör de aynı tabloyu
+okur.
+
+Etiketli çıktıda **üçüncü seçenek yoktur**: her çizim ya bir yapı elemanına
+aittir (`/P << /MCID n >> BDC`) ya da `/Artifact BMC` ile yapay işaretlenir.
+`Figure` rolündeki bir düğümde alternatif metin yoksa `WARN_MISSING_ALT`
+verilir (karekodda alternatif metin içerikten türetilir).
+
+PDF/A-1 saydamlığı yasakladığı için o profil seçilirse `opacity` değerleri
+1'e düzleştirilir ve `WARN_PDFA1_FLATTENED` bildirilir; PDF/A-2 ve
+sonrasında saydamlık korunur.
+
+---
+
+## 10. Sunucu uçları
 
 | Uç | İş |
 |---|---|
@@ -271,7 +311,7 @@ uçları mevcut gövde/sayım sınırlarına ve hız sınırına tabidir.
 
 ---
 
-## 10. Bilinen sınırlar
+## 11. Bilinen sınırlar
 
 Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
 
@@ -288,13 +328,11 @@ Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
   boyutluysa ilk sayfanınki kullanılır (`WARN_PAGE_SIZE_MISMATCH`).
 - **Metin kutuya sığmazsa kırpılmaz, uyarılır** (`WARN_TEXT_OVERFLOW`).
   Sahne PDF'inde taşan metin çizilir; kullanıcı kutuyu büyütmelidir.
-- **Sahne yolunda PDF/A ve PDF/UA profilleri yoktur.** Etiketli yapı ağacı,
-  çıktı amacı ve `pdfaid`/`pdfuaid` XMP'si yalnız HTML yolunda üretilir.
-  Sahne PDF'i geçerli bir PDF 1.7 belgesidir ama arşiv/erişilebilirlik
-  uyumu iddia etmez.
-- **Font seçimi sunucunun kayıtlı aileleriyle sınırlıdır.** Şu an yalnız
-  Ubuntu kayıtlıdır; `fontFamily` alanı şemada serbesttir ama derleyici
-  bulamadığı aileyi kayıtlı ilk aileye düşürür.
+- **PDF/UA'da okuma sırası TAHMİN edilir.** Serbest yerleşimde "önce yazılan
+  önce okunur" kuralı yoktur. `page.readingOrder` verilmezse görsel sıra
+  (yukarıdan aşağı, soldan sağa) varsayılır ve bu `WARN_READING_ORDER_GUESSED`
+  ile bildirilir. Soldan sağa yazılmayan diller ve sütunlu düzenler için sıra
+  kullanıcı tarafından verilmelidir.
 - **Döndürülmüş nesnelerde yapışma, dönmemiş çerçeveye göre hesaplanır.**
   Küçük açılarda fark edilmez, büyük açılarda kılavuz ile görünen kenar
   ayrışır.

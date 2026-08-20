@@ -602,7 +602,7 @@ test('POST /api/scene/render sahneyi PDF e derler', async () => {
       { id: 'baslik', type: 'text', frame: { x: 60, y: 80, width: 400, height: 40 },
         text: 'Sahne API', fontSize: 18 },
       { id: 'yuva', type: 'signature', frame: { x: 60, y: 700, width: 200, height: 60 },
-        fieldName: 'Imza1', role: 'Düzenleyen' }
+        fieldName: 'Imza1', signerTitle: 'Düzenleyen' }
     ]),
     assets: []
   });
@@ -614,6 +614,50 @@ test('POST /api/scene/render sahneyi PDF e derler', async () => {
   assert.strictEqual(body.manifest.signatureSlots.length, 1);
   assert.strictEqual(body.manifest.signatureSlots[0].fieldName, 'Imza1');
   assert.strictEqual(body.manifest.signatureSlots[0].origin, 'bottom-left');
+});
+
+test('POST /api/scene/render uyum profilini uygular ve BİLDİRİR', async () => {
+  const { status, body } = await call('/api/scene/render', {
+    scene: {
+      ...sceneWith([
+        { id: 'baslik', type: 'text', frame: { x: 60, y: 80, width: 400, height: 40 },
+          text: 'Erişilebilir', fontSize: 18, role: 'H1' },
+        { id: 'govde', type: 'text', frame: { x: 60, y: 140, width: 400, height: 60 },
+          text: 'Gövde metni.', fontSize: 11 }
+      ]),
+      meta: { title: 'Erişilebilir Sahne', lang: 'tr-TR' }
+    },
+    conformance: 'pdf/a-2b+pdf/ua'
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  assert.deepStrictEqual(body.conformance, { pdfA: '2b', pdfUA: true, tagged: true });
+
+  // İddia GERÇEKTEN denetlenir: profil yazılmış mı, yapı ağacı var mı?
+  const check = await call('/api/conformance/check', { pdf: body.pdf });
+  assert.strictEqual(check.status, 200, JSON.stringify(check.body));
+  assert.deepStrictEqual(check.body.profiles.sort(), ['pdf/a-2b', 'pdf/ua']);
+  assert.strictEqual(check.body.conforms, true,
+    JSON.stringify([check.body.pdfA && check.body.pdfA.errors,
+                    check.body.pdfUA && check.body.pdfUA.errors]));
+});
+
+test('POST /api/scene/render profil istenmezse uyum İDDİA ETMEZ', async () => {
+  const { status, body } = await call('/api/scene/render', {
+    scene: sceneWith([
+      { id: 't', type: 'text', frame: { x: 60, y: 80, width: 400, height: 40 },
+        text: 'Sade', fontSize: 12 }
+    ])
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  assert.strictEqual(body.conformance, null);
+
+  // İddia edilmediğine göre XMP damgası da yapı ağacı da yazılmamalıdır:
+  // istenmeden eklenen bir `pdfaid` damgası, denetlenmemiş bir söz olurdu.
+  const raw = unb64(body.pdf).toString('latin1');
+  assert.ok(!/pdfaid/.test(raw), 'PDF/A damgası istenmeden yazılmamalı');
+  assert.ok(!/\/StructTreeRoot/.test(raw), 'yapı ağacı istenmeden yazılmamalı');
 });
 
 test('POST /api/scene/render varlık kimliğini İÇERİKTEN yeniden hesaplar', async () => {

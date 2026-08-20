@@ -65,7 +65,13 @@ export class SceneEditor {
       geometry: this.lib.geometry,
       units: this.lib.units
     });
-    this.inspector = new Inspector(this.opts.inspectorRoot, this.canvas);
+    this.inspector = new Inspector(this.opts.inspectorRoot, this.canvas, {
+      // Rol tabloları ŞEMADAN gelir. Panelde ikinci bir liste tutmak,
+      // panelin "P" deyip derleyicinin "Figure" ürettiği güne kadar
+      // fark edilmez.
+      structRoles: this.lib.STRUCT_ROLES,
+      roleDefaults: this.lib.DEFAULT_ROLE
+    });
 
     this.canvas.onSelectionChange = () => this.inspector.render();
     this.canvas.onChange = () => this._touched();
@@ -419,12 +425,15 @@ export class SceneEditor {
    * Varlık baytları sahnenin dışında, ayrı bir dizide gider: on yerde
    * kullanılan bir görsel bir kez taşınır.
    */
-  async renderPdf() {
+  async renderPdf(options = {}) {
     const payload = {
       scene: this.scene.toJSON(),
       assets: [...this.assets.values()].map(({ meta, bytes }) => ({
         id: meta.id, name: meta.name, base64: bytesToBase64(bytes)
-      }))
+      })),
+      // Uyum profili İSTEĞE bağlıdır ve istenmeden iddia edilmez:
+      // etiketsiz bir belgeye "PDF/UA" damgası vurmak yalan olurdu.
+      conformance: options.conformance || null
     };
 
     const result = await this.opts.api.sceneRender(payload);

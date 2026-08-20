@@ -235,6 +235,27 @@
   color: var(--muted, #8b93a7);
 }
 
+.insp__sub {
+  margin: 12px 0 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line, #dfe3ea);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted, #8b93a7);
+}
+
+/* Eksik alternatif metin uyarısı: sessiz kalmak, geçersiz PDF/UA demek. */
+.insp__warn {
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #7a4a06;
+  background: rgb(240 173 78 / 18%);
+}
+
 .insp__row {
   display: flex;
   gap: 4px;

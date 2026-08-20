@@ -631,7 +631,9 @@ function bindSceneControls(editor) {
   $('#btnSceneRender').addEventListener('click', async () => {
     try {
       status('Sahne derleniyor…');
-      const result = await editor.renderPdf();
+      const result = await editor.renderPdf({
+        conformance: $('#sceneConformance').value || null
+      });
 
       // Üretilen belge imzalama ve doğrulama akışlarının da girdisidir
       state.pdf = editor.lastPdf;
@@ -647,6 +649,10 @@ function bindSceneControls(editor) {
       for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
       const slots = result.manifest.signatureSlots.length;
       toast(`PDF üretildi — ${result.manifest.pageCount} sayfa, ${slots} imza yuvası`, 'ok');
+
+      // İddia edilen uyum GERÇEKTEN denetlenir: damgayı vurup denetlemeden
+      // "uyumlu" demek, kullanıcıya olmayan bir güvence satmaktır.
+      if (result.conformance) await checkConformance({ quiet: true });
       status('PDF hazır');
     } catch (err) {
       handleError(err, 'Sahne derlenemedi');
@@ -766,7 +772,11 @@ async function init() {
     setOptions($('#themeSelect'), state.capabilities.themes, 'kurumsal');
     setOptions($('#stampTemplate'), state.capabilities.stampTemplates, 'dual');
     for (const profile of state.capabilities.conformanceProfiles || []) {
-      $('#conformance').appendChild(el('option', { value: profile, text: profile.toUpperCase() }));
+      // Aynı liste iki yerde: HTML yolu ve sahne yolu. Profiller SUNUCUDAN
+      // gelir; istemci desteklenmeyen bir profil uyduramaz.
+      for (const id of ['#conformance', '#sceneConformance']) {
+        $(id).appendChild(el('option', { value: profile, text: profile.toUpperCase() }));
+      }
     }
     if (!state.capabilities.serverSidePfx) {
       $('#serverSide').disabled = true;

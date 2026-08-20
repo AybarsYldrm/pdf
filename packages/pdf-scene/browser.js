@@ -55,7 +55,8 @@ const EXTERNAL_EXPORTS = {
 const EXPORTS = {
   './scene': ['Scene', 'makeId'],
   './validate': ['validateScene', 'SceneError', 'parseColor', 'colorToHex'],
-  './schema': ['SCHEMA_VERSION', 'PAGE_SIZES', 'NODE_TYPES', 'LIMITS'],
+  './schema': ['SCHEMA_VERSION', 'PAGE_SIZES', 'NODE_TYPES', 'LIMITS',
+               'STRUCT_ROLES', 'DEFAULT_ROLE'],
   './assets': ['AssetManager', 'AssetError', 'sniff'],
   './history': ['History']
 };

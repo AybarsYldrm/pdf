@@ -14,7 +14,9 @@
  * beş turda öğrenmek yerine tek seferde görsün.
  */
 
-const { SCHEMA_VERSION, PAGE_SIZES, NODE_TYPES, COMMON_FIELDS, LIMITS } = require('./schema');
+const {
+  SCHEMA_VERSION, PAGE_SIZES, NODE_TYPES, COMMON_FIELDS, LIMITS, STRUCT_ROLES
+} = require('./schema');
 const units = require('./units');
 
 class SceneError extends Error {
@@ -253,6 +255,17 @@ class Validator {
     }
     this.ids.add(id);
 
+    // İmza yuvasında `role` ESKİDEN imzalayanın unvanıydı ("Genel Müdür").
+    // Artık `role` her düğümde PDF/UA yapı rolüdür; unvan `signerTitle`a
+    // taşındı. Eski belge sessizce "unvanı olmayan yuva"ya dönüşmesin diye
+    // durum açıkça bildirilir.
+    if (type === 'signature' && typeof raw.role === 'string' &&
+        raw.role && !STRUCT_ROLES.includes(raw.role)) {
+      return this.fail(`${path}.role`, 'ERR_RENAMED_FIELD',
+        'İmza yuvasında `role` artık PDF/UA yapı rolüdür; ' +
+        'imzalayanın unvanı için `signerTitle` alanını kullanın');
+    }
+
     const out = { id, type };
     for (const [key, spec] of Object.entries(COMMON_FIELDS)) {
       if (key === 'id' || key === 'type') continue;
@@ -351,6 +364,42 @@ class Validator {
       const node = this.node(`${path}.nodes[${i}]`, n, 1);
       if (node !== undefined) out.nodes.push(node);
     }
+
+    /**
+     * OKUMA SIRASI — ekran okuyucunun izleyeceği yol.
+     *
+     * Serbest yerleşimde çizim sırası (z-index) ile okuma sırası aynı şey
+     * DEĞİLDİR: en arkadaki başlık ilk okunmalıdır. Kullanıcı vermezse
+     * derleyici görsel bir sıra (yukarıdan aşağı, soldan sağa) hesaplar;
+     * burada verilmişse kullanıcının dediği geçerlidir.
+     */
+    if (raw.readingOrder !== undefined) {
+      if (!Array.isArray(raw.readingOrder)) {
+        this.fail(`${path}.readingOrder`, 'ERR_TYPE', 'Dizi bekleniyordu');
+      } else {
+        const known = new Set();
+        const collect = (list) => {
+          for (const n of list) { known.add(n.id); if (n.children) collect(n.children); }
+        };
+        collect(out.nodes);
+
+        out.readingOrder = [];
+        for (const [i, id] of raw.readingOrder.entries()) {
+          if (typeof id !== 'string' || !known.has(id)) {
+            this.fail(`${path}.readingOrder[${i}]`, 'ERR_UNKNOWN_NODE',
+              `Okuma sırasında bu sayfada olmayan düğüm: ${id}`);
+            continue;
+          }
+          if (out.readingOrder.includes(id)) {
+            this.fail(`${path}.readingOrder[${i}]`, 'ERR_DUPLICATE_ID',
+              `Okuma sırasında yinelenen düğüm: ${id}`);
+            continue;
+          }
+          out.readingOrder.push(id);
+        }
+      }
+    }
+
     return out;
   }
 

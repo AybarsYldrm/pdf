@@ -14,7 +14,7 @@
 
 const crypto = require('crypto');
 const { validateScene, SceneError } = require('./validate');
-const { SCHEMA_VERSION, NODE_TYPES, PAGE_SIZES } = require('./schema');
+const { SCHEMA_VERSION, NODE_TYPES, PAGE_SIZES, COMMON_FIELDS } = require('./schema');
 const geometry = require('./geometry');
 const { History } = require('./history');
 const { AssetManager } = require('./assets');
@@ -215,18 +215,21 @@ class Scene {
     const node = {
       id: props.id || makeId(),
       type,
-      name: props.name || '',
       frame: {
         x: round(props.x !== undefined ? props.x : (props.frame ? props.frame.x : 0)),
         y: round(props.y !== undefined ? props.y : (props.frame ? props.frame.y : 0)),
         width: round(props.width !== undefined ? props.width : (props.frame ? props.frame.width : 120)),
         height: round(props.height !== undefined ? props.height : (props.frame ? props.frame.height : 40))
-      },
-      rotation: props.rotation || 0,
-      opacity: props.opacity === undefined ? 1 : props.opacity,
-      locked: props.locked === true,
-      hidden: props.hidden === true
+      }
     };
+
+    // Ortak alanlar ŞEMADAN gelir, burada elle sayılmaz. Elle sayılırsa
+    // şemaya eklenen bir alan (örn. `role`) burada sessizce düşer ve
+    // kullanıcının verdiği değer kaybolur.
+    for (const [key, spec] of Object.entries(COMMON_FIELDS)) {
+      if (key === 'id' || key === 'type' || key === 'frame') continue;
+      node[key] = props[key] !== undefined ? props[key] : spec.default;
+    }
 
     for (const [key, spec] of Object.entries(def.fields)) {
       if (props[key] !== undefined) node[key] = props[key];

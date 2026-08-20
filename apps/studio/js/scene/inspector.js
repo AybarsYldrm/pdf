@@ -45,8 +45,8 @@ const FIELDS = {
     { key: 'dash', label: 'Biçim', kind: 'enum', values: ['solid', 'dashed', 'dotted'] }
   ],
   image: [
-    { key: 'fit', label: 'Oturtma', kind: 'enum', values: ['contain', 'cover', 'fill'] },
-    { key: 'alt', label: 'Alternatif metin', kind: 'text' }
+    { key: 'fit', label: 'Oturtma', kind: 'enum', values: ['contain', 'cover', 'fill'] }
+    // `alt` her düğümde ortaktır; erişilebilirlik bölümünde düzenlenir.
   ],
   qr: [
     { key: 'payload', label: 'İçerik', kind: 'textarea' },
@@ -56,7 +56,7 @@ const FIELDS = {
   signature: [
     { key: 'fieldName', label: 'Alan adı', kind: 'text' },
     { key: 'signer', label: 'İmzalayan', kind: 'text' },
-    { key: 'role', label: 'Rol', kind: 'text' },
+    { key: 'signerTitle', label: 'Unvan', kind: 'text' },
     { key: 'label', label: 'Etiket', kind: 'text' },
     { key: 'showFrame', label: 'Çerçeve göster', kind: 'bool' }
   ],
@@ -68,17 +68,22 @@ const TYPE_LABELS = {
   image: 'Görsel', qr: 'Karekod', signature: 'İmza yuvası', group: 'Grup'
 };
 
+
 export class Inspector {
   /**
    * @param {HTMLElement} root
    * @param {Object} canvas SceneCanvas
+   * @param {{ structRoles?: string[], roleDefaults?: Object }} [schema]
+   *        sahne paketinden gelen rol tabloları
    */
-  constructor(root, canvas) {
+  constructor(root, canvas, schema = {}) {
     this.root = root;
     this.canvas = canvas;
     this.onChange = () => {};
     /** Sunucunun sunduğu font aileleri (`/api/health` → `fonts`). */
     this.fontFamilies = [];
+    this.structRoles = schema.structRoles || ['auto', 'artifact'];
+    this.roleDefaults = schema.roleDefaults || {};
   }
 
   /**
@@ -235,6 +240,8 @@ export class Inspector {
       this._btn('En arkaya', () => this._reorder(node.id, 'back'))
     ]));
 
+    for (const row of this._accessibilityRows(node)) rows.push(row);
+
     if (node.type === 'group') {
       rows.push(this._btn('Grubu çöz', () => {
         this.scene.transaction('Grubu çöz', () => this.scene.ungroup(node.id));
@@ -243,6 +250,37 @@ export class Inspector {
     }
 
     return el('section', { class: 'insp' }, rows);
+  }
+
+  /**
+   * Erişilebilirlik alanları.
+   *
+   * Ekran okuyucu punto göremez: 22 punto bir metnin BAŞLIK olduğunu ancak
+   * kullanıcı söyleyebilir. Bu yüzden rol modelde taşınır ve burada
+   * düzenlenir. `Figure` seçili ve alternatif metin boşsa PDF/UA çıktısı
+   * geçersizdir — panel bunu sessizce geçmez, uyarır.
+   */
+  _accessibilityRows(node) {
+    const rows = [el('h4', { class: 'insp__sub', text: 'Erişilebilirlik' })];
+    const effective = this.roleDefaults[node.type] || 'artifact';
+
+    rows.push(this._field(node, {
+      key: 'role', label: `Yapı rolü (kendiliğinden: ${effective})`,
+      kind: 'enum', values: this.structRoles
+    }));
+
+    const role = node.role && node.role !== 'auto' ? node.role : effective;
+    if (role !== 'artifact') {
+      rows.push(this._field(node, { key: 'alt', label: 'Alternatif metin', kind: 'text' }));
+      rows.push(this._field(node, { key: 'lang', label: 'Dil (farklıysa)', kind: 'text' }));
+      if (role === 'Figure' && !node.alt && node.type !== 'qr') {
+        rows.push(el('p', {
+          class: 'insp__warn',
+          text: 'PDF/UA: görsel için alternatif metin zorunludur.'
+        }));
+      }
+    }
+    return rows;
   }
 
   _geometryRow(node) {

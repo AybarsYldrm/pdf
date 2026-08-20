@@ -174,7 +174,7 @@ test('PDF: imza yuvası ÇİZİLMEZ, manifestte bildirilir', () => {
   s.transaction('Kur', () => {
     s.addNode(Scene.createNode('signature', {
       id: 'sig', x: 80, y: 700, width: 200, height: 60,
-      fieldName: 'Imza_Yetkili', signer: 'Aybars', role: 'Düzenleyen', showFrame: false
+      fieldName: 'Imza_Yetkili', signer: 'Aybars', signerTitle: 'Düzenleyen', showFrame: false
     }));
   });
 

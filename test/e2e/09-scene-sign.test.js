@@ -58,7 +58,7 @@ function certificateScene() {
     }));
     s.addNode(Scene.createNode('signature', {
       id: 'yuva', x: 330, y: 640, width: 200, height: 70,
-      fieldName: 'Imza_Yetkili', signer: 'Aybars YILDIRIM', role: 'Düzenleyen'
+      fieldName: 'Imza_Yetkili', signer: 'Aybars YILDIRIM', signerTitle: 'Düzenleyen'
     }));
   });
   return s;
@@ -262,10 +262,10 @@ test('sahne PDF si aynı belgede iki imzayı taşır', async () => {
   s.transaction('Kur', () => {
     s.addNode(Scene.createNode('text', { x: 60, y: 60, width: 400, height: 30, text: 'Çift imzalı' }));
     s.addNode(Scene.createNode('signature', {
-      x: 60, y: 640, width: 180, height: 60, fieldName: 'Imza_A', role: 'Hazırlayan'
+      x: 60, y: 640, width: 180, height: 60, fieldName: 'Imza_A', signerTitle: 'Hazırlayan'
     }));
     s.addNode(Scene.createNode('signature', {
-      x: 330, y: 640, width: 180, height: 60, fieldName: 'Imza_B', role: 'Onaylayan'
+      x: 330, y: 640, width: 180, height: 60, fieldName: 'Imza_B', signerTitle: 'Onaylayan'
     }));
   });
 

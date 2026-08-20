@@ -633,6 +633,54 @@ test('sahne: bozuk belge yüklenmez (yarım geçerli nesne kurulmaz)', () => {
     (err) => err instanceof SceneError && err.issues.length > 0);
 });
 
+test('sahne: imza yuvasında eski `role` alanı SESSİZCE yutulmaz', () => {
+  const s = Scene.blank({ title: 'Eski' });
+  const json = s.toJSON();
+  json.pages[0].nodes.push({
+    id: 'sig', type: 'signature',
+    frame: { x: 60, y: 700, width: 180, height: 60 },
+    fieldName: 'Imza1', role: 'Genel Müdür'      // eski biçim
+  });
+
+  assert.throws(() => Scene.fromJSON(json), (err) => {
+    assert.ok(err instanceof SceneError);
+    assert.strictEqual(err.issues[0].code, 'ERR_RENAMED_FIELD');
+    assert.match(err.issues[0].message, /signerTitle/);
+    return true;
+  });
+});
+
+test('sahne: unvan `signerTitle` alanında taşınır, `role` yapı rolüdür', () => {
+  const s = Scene.blank({ title: 'Yeni' });
+  s.transaction('Kur', () => {
+    s.addNode(Scene.createNode('signature', {
+      id: 'sig', x: 60, y: 700, width: 180, height: 60,
+      fieldName: 'Imza1', signerTitle: 'Genel Müdür'
+    }));
+  });
+
+  const back = Scene.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  assert.strictEqual(back.node('sig').signerTitle, 'Genel Müdür');
+  assert.strictEqual(back.node('sig').role, 'auto');
+});
+
+test('sahne: yapı rolü ve alternatif metin düğümde KORUNUR', () => {
+  const s = Scene.blank({ title: 'Erişilebilir' });
+  s.transaction('Kur', () => {
+    s.addNode(Scene.createNode('text', {
+      id: 'h', x: 60, y: 60, width: 300, height: 30,
+      text: 'Başlık', role: 'H1', lang: 'tr-TR'
+    }));
+  });
+
+  // createNode ortak alanları ŞEMADAN okur; elle sayılan bir listede
+  // yeni alan eklendiğinde sessizce düşerdi.
+  assert.strictEqual(s.node('h').role, 'H1');
+  const back = Scene.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  assert.strictEqual(back.node('h').role, 'H1');
+  assert.strictEqual(back.node('h').lang, 'tr-TR');
+});
+
 /* ================================================================== */
 /* Geçmiş yığını                                                       */
 /* ================================================================== */

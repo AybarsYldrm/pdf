@@ -369,6 +369,9 @@ const routes = {
       result = scene.compileToPdf(doc, {
         assets,
         fonts: sceneFonts(body.fonts),
+        // PDF/A + PDF/UA sahne yolunda da istenebilir. Bilinmeyen profil
+        // sessizce yutulmaz: derleyici uyarı üretir ve iddia edilmez.
+        conformance: body.conformance || null,
         compress: body.compress !== false
       });
     } catch (err) {
@@ -379,7 +382,8 @@ const routes = {
     sendJson(res, 200, {
       pdf: b64(result.pdf),
       manifest: result.manifest,
-      warnings: result.warnings
+      warnings: result.warnings,
+      conformance: result.conformance || null
     });
   },
 

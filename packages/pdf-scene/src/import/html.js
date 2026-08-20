@@ -173,7 +173,7 @@ function importFromHtml(o = {}) {
       scene.addNode(Scene.createNode('signature', {
         x: round(marginLeft + rect.x), y: round(marginTop + rect.y),
         width: round(rect.width), height: round(rect.height),
-        fieldName: slot.id || '', role: slot.role || '', label: 'İmza'
+        fieldName: slot.id || '', signerTitle: slot.role || '', label: 'İmza'
       }), { pageId: scene.pages[slot.page] ? scene.pages[slot.page].id : scene.pages[0].id });
     }
   });

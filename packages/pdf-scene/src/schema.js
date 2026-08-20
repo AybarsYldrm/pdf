@@ -105,8 +105,9 @@ const NODE_TYPES = {
   image: {
     fields: {
       assetId: { type: 'assetRef', required: true },
-      fit:     { type: 'enum', values: ['contain', 'cover', 'fill'], default: 'contain' },
-      alt:     { type: 'string', default: '', maxLength: 1000 }
+      fit:     { type: 'enum', values: ['contain', 'cover', 'fill'], default: 'contain' }
+      // `alt` ORTAK alanlardadır: her düğüm tipi için anlamlıdır ve
+      // PDF/UA onu Figure'larda ZORUNLU kılar.
     }
   },
 
@@ -132,7 +133,11 @@ const NODE_TYPES = {
     fields: {
       fieldName: { type: 'string', default: '', maxLength: 127 },
       signer:    { type: 'string', default: '', maxLength: 256 },
-      role:      { type: 'string', default: '', maxLength: 256 },
+      /**
+       * İmzalayanın UNVANI ("Genel Müdür"). PDF/UA yapı rolü olan ortak
+       * `role` alanıyla KARIŞTIRILMAMALIDIR; adı bu yüzden ayrıdır.
+       */
+      signerTitle: { type: 'string', default: '', maxLength: 256 },
       label:     { type: 'string', default: 'İmza', maxLength: 256 },
       showFrame: { type: 'boolean', default: true }
     }
@@ -149,6 +154,40 @@ const NODE_TYPES = {
   }
 };
 
+/**
+ * Erişilebilirlik (PDF/UA) yapı rolleri.
+ *
+ * Serbest yerleşimde "başlık" ile "gövde metni" arasındaki fark GÖRSELDİR:
+ * biri büyük punto, diğeri küçük. Ekran okuyucu punto göremez; rolü görür.
+ * Bu yüzden rol MODELDE taşınır ve kullanıcı tarafından verilir.
+ *
+ * `artifact` içerik DEĞİLDİR: arka plan, süs çizgisi, çerçeve. Etiketlenmez
+ * ama "etiketsiz içerik" de sayılmaz — `/Artifact` olarak işaretlenir.
+ */
+const STRUCT_ROLES = [
+  'auto', 'artifact',
+  'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'Figure', 'Caption', 'Formula', 'Note', 'Quote', 'Code', 'Span'
+];
+
+/**
+ * `role: 'auto'` seçildiğinde tipe göre uygulanacak rol.
+ *
+ * Şemada durur çünkü hem derleyici hem editör aynı cevabı vermek
+ * zorundadır: panelde "kendiliğinden: P" yazıp PDF'te `Figure` üretmek,
+ * kullanıcının göremediği bir yalandır.
+ */
+const DEFAULT_ROLE = {
+  text: 'P',
+  image: 'Figure',
+  qr: 'Figure',
+  rect: 'artifact',
+  ellipse: 'artifact',
+  line: 'artifact',
+  signature: 'artifact',
+  group: 'artifact'
+};
+
 /** Her düğümde bulunan alanlar. */
 const COMMON_FIELDS = {
   id:       { type: 'id', required: true },
@@ -158,7 +197,14 @@ const COMMON_FIELDS = {
   rotation: { type: 'number', default: 0, min: -360, max: 360 },
   opacity:  { type: 'number', default: 1, min: 0, max: 1 },
   locked:   { type: 'boolean', default: false },
-  hidden:   { type: 'boolean', default: false }
+  hidden:   { type: 'boolean', default: false },
+
+  /** PDF/UA yapı rolü. `auto` tipe göre seçilir. */
+  role:     { type: 'enum', values: STRUCT_ROLES, default: 'auto' },
+  /** Görsel olmayan okuyucular için alternatif metin. */
+  alt:      { type: 'string', default: '', maxLength: 2000 },
+  /** Bu düğümün dili belgeden farklıysa (örn. tek satırlık İngilizce alıntı). */
+  lang:     { type: 'string', default: '', maxLength: 32 }
 };
 
 /**
@@ -178,4 +224,7 @@ const LIMITS = {
   maxNameLength: 256
 };
 
-module.exports = { SCHEMA_VERSION, PAGE_SIZES, NODE_TYPES, COMMON_FIELDS, LIMITS };
+module.exports = {
+  SCHEMA_VERSION, PAGE_SIZES, NODE_TYPES, COMMON_FIELDS, LIMITS,
+  STRUCT_ROLES, DEFAULT_ROLE
+};

@@ -27,7 +27,7 @@ scene.transaction('Kur', () => {
   }));
   scene.addNode(Scene.createNode('signature', {
     x: 330, y: 640, width: 200, height: 70,
-    fieldName: 'Imza_Yetkili', role: 'Düzenleyen'
+    fieldName: 'Imza_Yetkili', signerTitle: 'Düzenleyen'
   }));
 });
 

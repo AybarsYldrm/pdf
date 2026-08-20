@@ -115,6 +115,14 @@
         artık akmaz, uzayan metin sonrakini itmez.</p>
 
       <h2 class="pane__title">Çıktı</h2>
+      <label class="field">
+        <span class="field__label">Uyumluluk profili</span>
+        <select id="sceneConformance" class="input">
+          <option value="">Yok (standart PDF)</option>
+        </select>
+      </label>
+      <p class="hint">PDF/UA seçilirse okuma sırası ve alternatif metinler
+        <strong>zorunlu</strong> olur; eksikler uyarı olarak bildirilir.</p>
       <div class="pane__actions pane__actions--wrap">
         <button class="btn btn--primary" id="btnSceneRender" type="button">PDF üret</button>
         <button class="btn" id="btnSceneDownload" type="button" disabled>İndir</button>

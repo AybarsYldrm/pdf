@@ -21,7 +21,9 @@ const { PdfEmitter, embedFont } = require('@fitfak/pdf-html/src/pdf/emitter');
 const PngParser = require('@fitfak/pdf/src/media/PngParser');
 const JpegParser = require('@fitfak/pdf/src/media/JpegParser');
 const { FontManager } = require('@fitfak/pdf-html/src/font/manager');
+const { writeStructTree } = require('@fitfak/pdf-html/src/pdf/tagged');
 const { readFontInfo } = require('@fitfak/pdf/src/fonts/FontInfo');
+const tagging = require('./tagging');
 
 const { validateScene, SceneError, parseColor } = require('../validate');
 const geometry = require('../geometry');
@@ -49,6 +51,8 @@ function collectItems(scene, page, ctx) {
   const links = [];
   const slots = [];
   const warnings = [];
+  /** Etiketleme için: mutlak çerçeveli, gruplar çözülmüş düğüm listesi. */
+  const placed = [];
 
   const walk = (nodes, ancestry) => {
     for (const node of nodes) {
@@ -60,16 +64,26 @@ function collectItems(scene, page, ctx) {
         walk(node.children || [], chain);
         continue;
       }
+      placed.push({
+        id: node.id, type: node.type, frame: abs,
+        role: node.role, alt: node.alt, lang: node.lang, payload: node.payload
+      });
       emitNode(node, abs, ctx, { items, links, slots, warnings });
     }
   };
 
   walk(page.nodes, []);
-  return { items, links, slots, warnings };
+  return { items, links, slots, warnings, placed };
 }
 
 function emitNode(node, abs, ctx, out) {
-  const common = { opacity: node.opacity, rotation: abs.rotation, cx: abs.x + abs.width / 2, cy: abs.y + abs.height / 2 };
+  // `nodeId` her çizim öğesine iliştirilir: etiketleme katmanı, hangi
+  // çizimin hangi düğüme ait olduğunu başka türlü bilemez.
+  const common = {
+    nodeId: node.id,
+    opacity: node.opacity, rotation: abs.rotation,
+    cx: abs.x + abs.width / 2, cy: abs.y + abs.height / 2
+  };
 
   switch (node.type) {
     case 'rect':
@@ -170,7 +184,10 @@ function emitNode(node, abs, ctx, out) {
         id: node.id,
         fieldName: node.fieldName || node.id,
         signer: node.signer || '',
-        role: node.role || '',
+        // Manifestteki `role`, @fitfak/pdf-html manifestiyle AYNI anlamdadır:
+        // imzalayanın unvanı. Sahne düğümünde bu alanın adı `signerTitle`dır
+        // çünkü orada `role` PDF/UA yapı rolüne aittir.
+        role: node.signerTitle || '',
         label: node.label || '',
         rect: { x: abs.x, y: abs.y, width: abs.width, height: abs.height }
       });
@@ -254,7 +271,24 @@ function buildContent(items, pageHeight, refs) {
   const usedImages = new Set();
   const flipY = (y) => pageHeight - y;
 
+  /**
+   * ETİKETLİ ÇIKTIDA ÜÇÜNCÜ SEÇENEK YOKTUR.
+   *
+   * Her çizim ya bir yapı elemanına aittir (`/P <</MCID n>> BDC`) ya da
+   * yapaydır (`/Artifact BMC`). İkisi de olmayan çizim, PDF/UA'da
+   * "etiketlenmemiş içerik" hatasıdır — ekran okuyucu onu ne okuyabilir
+   * ne de atlayabilir.
+   */
+  const tagged = !!(refs && refs.tagged);
+  const openMark = (item) => {
+    if (!tagged) return;
+    if (item.mcid === undefined) { parts.push('/Artifact BMC'); return; }
+    parts.push(`/${item.role || 'P'} << /MCID ${item.mcid} >> BDC`);
+  };
+  const closeMark = () => { if (tagged) parts.push('EMC'); };
+
   for (const item of items) {
+    openMark(item);
     parts.push('q');
 
     if (item.opacity !== undefined && item.opacity !== 1) {
@@ -320,6 +354,7 @@ function buildContent(items, pageHeight, refs) {
     }
 
     parts.push('Q');
+    closeMark();
   }
 
   return { content: parts.join('\n'), usedFonts, usedImages };
@@ -379,6 +414,102 @@ function embedImage(emitter, bytes, mime) {
   };
   const id = new PngParser(bytes).embedToDocument(adapter);
   return typeof id === 'number' ? id : adapter._lastId;
+}
+
+/* ------------------------------------------------------------------ */
+/* Uyumluluk                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * İstenen uyumluluk profilini çözer ve belgenin onu KARŞILAYABİLECEĞİNİ
+ * denetler.
+ *
+ * Uyumluluğu "iddia etmek" ile "sağlamak" farklı şeylerdir. XMP'ye
+ * `pdfaid:part 1` yazıp saydamlık kullanan bir belge, iddiasıyla çelişir
+ * ve doğrulayıcıda kırmızı yanar. Bu yüzden karşılanamayacak isteği
+ * sessizce yazmıyoruz; ya düzeltiyoruz ya söylüyoruz.
+ */
+function resolveConformance(value, scene, warnings) {
+  if (!value) return null;
+
+  let pdfA = null;
+  let pdfUA = false;
+
+  if (typeof value === 'string') {
+    const text = value.toLowerCase();
+    const m = /pdf\/a-?(\d)([ab])?/.exec(text);
+    if (m) pdfA = `${m[1]}${m[2] || 'b'}`;
+    if (/pdf\/ua/.test(text)) pdfUA = true;
+    if (!pdfA && !pdfUA) {
+      warnings.push({
+        code: 'WARN_UNKNOWN_PROFILE',
+        message: `Bilinmeyen uyumluluk profili: ${value}`
+      });
+      return null;
+    }
+  } else if (typeof value === 'object') {
+    pdfA = value.pdfA ? String(value.pdfA).replace(/^pdf\/a-?/i, '') : null;
+    pdfUA = !!value.pdfUA;
+  }
+
+  if (pdfA && !['1b', '2b', '3b', '2a', '3a'].includes(pdfA)) {
+    warnings.push({
+      code: 'WARN_PROFILE_LEVEL',
+      message: `Desteklenmeyen PDF/A düzeyi: ${pdfA}; 2b kullanılıyor`
+    });
+    pdfA = '2b';
+  }
+
+  // 'a' düzeyi (erişilebilir arşiv) ve PDF/UA etiketleme gerektirir
+  const tagged = pdfUA || (pdfA ? pdfA.endsWith('a') : false);
+
+  if (tagged && !scene.meta.title) {
+    warnings.push({
+      code: 'WARN_NO_TITLE',
+      message: 'PDF/UA belge başlığı ister; başlıksız belge doğrulamayı geçmez ' +
+               '(meta.title).'
+    });
+  }
+
+  // PDF/A-1 saydamlığa izin VERMEZ (ISO 19005-1 §6.4)
+  if (pdfA === '1b' || pdfA === '1a') {
+    const transparent = scene.pages.some((p) => hasTransparency(p.nodes));
+    if (transparent) {
+      warnings.push({
+        code: 'WARN_PDFA1_TRANSPARENCY',
+        message: 'PDF/A-1 saydamlığa izin vermez; saydam nesneler tam opak ' +
+                 'çizildi. Saydamlık gerekiyorsa PDF/A-2 ya da 3 seçin.'
+      });
+    }
+    return { pdfA, pdfUA, tagged, flattenTransparency: transparent };
+  }
+
+  return { pdfA, pdfUA, tagged, flattenTransparency: false };
+}
+
+function hasTransparency(nodes) {
+  for (const n of nodes) {
+    if (n.opacity !== undefined && n.opacity !== 1) return true;
+    if (n.children && hasTransparency(n.children)) return true;
+  }
+  return false;
+}
+
+/**
+ * Çizim öğelerine MCID atar ve plandaki girdilere kaydeder.
+ *
+ * Numaralar sayfa başına ve ÇİZİM SIRASINA göre verilir (PDF'in beklediği
+ * budur); okuma sırası ayrı bir şeydir ve yapı ağacında yaşar.
+ */
+function assignMcids(items, plan, pageIndex) {
+  let next = 0;
+  for (const item of items) {
+    const entry = item.nodeId ? plan.entries.get(item.nodeId) : null;
+    if (item.artifact || !entry) continue;      // yapay içerik: /Artifact
+    item.mcid = next++;
+    item.role = entry.role;
+    entry.mcids.push({ mcid: item.mcid, page: pageIndex });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -487,9 +618,17 @@ function compileToPdf(sceneInput, o = {}) {
 
   const ctx = { fonts, resolveFace, assets, renderQr };
 
+  /* --- uyumluluk profili --------------------------------------------
+   * PDF/A arşivlenebilirlik (gömülü font + ICC + XMP iddiası),
+   * PDF/UA erişilebilirlik (etiketli yapı ağacı + okuma sırası) demektir.
+   * İkisi de belgeyi DEĞİŞTİRİR; istenmedikçe uygulanmaz. */
+  const conformance = resolveConformance(o.conformance, scene, warnings);
+  const tagged = !!(conformance && conformance.tagged);
+
   /* --- çizim listeleri --- */
   const pages = [];
   const manifestPages = [];
+  const pagePlans = [];
 
   for (const [index, page] of scene.pages.entries()) {
     const collected = collectItems(scene, page, ctx);
@@ -499,10 +638,30 @@ function compileToPdf(sceneInput, o = {}) {
       items.push({
         type: 'rect', x: 0, y: 0,
         width: scene.page.width, height: scene.page.height,
-        fill: page.background, opacity: 1, rotation: 0
+        // Sayfa zemini İÇERİK değildir; okunacak bir şey taşımaz.
+        fill: page.background, opacity: 1, rotation: 0, artifact: true
       });
     }
     items.push(...collected.items);
+
+    // Etiketleme planı: okuma sırası + rol + alternatif metin
+    const plan = tagged
+      ? tagging.planPage(page, collected.placed)
+      : { order: [], entries: new Map(), guessed: false, warnings: [] };
+
+    if (tagged) {
+      assignMcids(items, plan, index);
+      warnings.push(...plan.warnings.map((w) => ({ ...w, page: index })));
+      if (plan.guessed) {
+        warnings.push({
+          code: 'WARN_READING_ORDER_GUESSED', page: index,
+          message: `Sayfa ${index + 1}: okuma sırası verilmedi; görsel sıra ` +
+                   '(yukarıdan aşağı, soldan sağa) varsayıldı. Ekran okuyucu ' +
+                   'için doğru sıra yalnız sizin bildiğiniz bir şeydir.'
+        });
+      }
+    }
+    pagePlans.push(plan);
 
     pages.push({ index, items, links: collected.links, slots: collected.slots });
     warnings.push(...collected.warnings.map((w) => ({ ...w, page: index })));
@@ -560,12 +719,18 @@ function compileToPdf(sceneInput, o = {}) {
     }
   }
 
-  // Saydamlık durumları — yalnız gerçekten kullanılanlar
+  // Saydamlık durumları — yalnız gerçekten kullanılanlar.
+  // PDF/A-1 saydamlığı YASAKLAR: iddia ile içerik çelişmesin diye
+  // saydamlık düzleştirilir (uyarı `resolveConformance`ta verildi).
   const alphas = new Set();
-  for (const p of pages) {
-    for (const item of p.items) {
-      if (item.opacity !== undefined && item.opacity !== 1) {
-        alphas.add(Math.round(item.opacity * 100));
+  if (conformance && conformance.flattenTransparency) {
+    for (const p of pages) for (const item of p.items) item.opacity = 1;
+  } else {
+    for (const p of pages) {
+      for (const item of p.items) {
+        if (item.opacity !== undefined && item.opacity !== 1) {
+          alphas.add(Math.round(item.opacity * 100));
+        }
       }
     }
   }
@@ -579,7 +744,7 @@ function compileToPdf(sceneInput, o = {}) {
 
   for (const p of pages) {
     const { content, usedFonts, usedImages } =
-      buildContent(p.items, scene.page.height, { images: imageRefs });
+      buildContent(p.items, scene.page.height, { images: imageRefs, tagged });
     const contentId = emitter.addStream({}, content);
 
     const fontDict = [...usedFonts].map((id) => `/${id} ${fontRefs.get(id)} 0 R`).join(' ');
@@ -598,7 +763,7 @@ function compileToPdf(sceneInput, o = {}) {
       } })} 0 R`);
     }
 
-    pageIds.push(emitter.add({ dict: {
+    const pageDict = {
       Type: '/Page',
       Parent: `${pagesRootId} 0 R`,
       MediaBox: `[0 0 ${fmt(scene.page.width)} ${fmt(scene.page.height)}]`,
@@ -610,7 +775,11 @@ function compileToPdf(sceneInput, o = {}) {
       }),
       Contents: `${contentId} 0 R`,
       Annots: annots.length ? `[${annots.join(' ')}]` : undefined
-    } }));
+    };
+    // `/StructParents` olmadan işaretli içerik yapı ağacına geri izlenemez
+    if (tagged) pageDict.StructParents = p.index;
+
+    pageIds.push(emitter.add({ dict: pageDict }));
   }
 
   emitter.set(pagesRootId, { dict: {
@@ -633,15 +802,56 @@ function compileToPdf(sceneInput, o = {}) {
   }
   const infoId = emitter.add({ dict: info });
 
-  const catalogId = emitter.add({ dict: {
+  const catalogDict = {
     Type: '/Catalog',
     Pages: `${pagesRootId} 0 R`,
     Lang: PdfEmitter.literalString(scene.meta.lang || 'tr-TR'),
     ViewerPreferences: '<< /DisplayDocTitle true >>'
-  } });
+  };
+
+  /* --- XMP üst verisi -----------------------------------------------
+   * PDF/A ve PDF/UA iddiaları BURADA yazılır. XMP UTF-8'dir ve Buffer
+   * olarak verilir: emitter dizgileri latin1 yazar, Türkçe karakterler
+   * orada bozulur ve /Info ile XMP çelişir (PDF/A §6.7.3 hatası). */
+  if (conformance) {
+    const { buildXmp } = require('@fitfak/conformance');
+    const xmp = buildXmp({
+      title: scene.meta.title,
+      author: scene.meta.author,
+      subject: scene.meta.subject,
+      keywords: scene.meta.keywords,
+      producer: 'fitfak-belge / @fitfak/pdf-scene',
+      creator: o.creator || 'fitfak-belge',
+      pdfA: conformance.pdfA,
+      pdfUA: conformance.pdfUA
+    });
+    catalogDict.Metadata = `${emitter.addStream(
+      { Type: '/Metadata', Subtype: '/XML' },
+      Buffer.from(xmp, 'utf8'),
+      { compress: false }        // PDF/A: XMP akışı sıkıştırılmamalı
+    )} 0 R`;
+  }
+
+  /* --- Etiketli PDF: yapı ağacı --- */
+  if (tagged) {
+    // MCID'ler sayfa sayfa atandı; ağaç şimdi okuma sırasına göre kurulur.
+    const structRoot = tagging.buildStructRoot(pagePlans);
+    catalogDict.StructTreeRoot = `${writeStructTree(emitter, structRoot, pageIds)} 0 R`;
+    catalogDict.MarkInfo = '<< /Marked true >>';
+  }
+
+  /* --- PDF/A: cihazdan bağımsız renk için çıktı amacı --- */
+  if (conformance && conformance.pdfA) {
+    catalogDict.OutputIntents = `[${writeOutputIntent(emitter)}]`;
+  }
+
+  const catalogId = emitter.add({ dict: catalogDict });
 
   return {
     pdf: emitter.build({ rootObj: catalogId, infoObj: infoId }),
+    conformance: conformance
+      ? { pdfA: conformance.pdfA, pdfUA: conformance.pdfUA, tagged }
+      : null,
     manifest: {
       pages: manifestPages,
       slots: manifestPages.flatMap((p) => p.slots),
@@ -655,4 +865,29 @@ function compileToPdf(sceneInput, o = {}) {
   };
 }
 
-module.exports = { compileToPdf, collectItems, buildContent, ellipsePath };
+/**
+ * sRGB çıktı amacı — ICC profili gömülür.
+ *
+ * PDF/A, rengin cihazdan bağımsız yorumlanabilmesini ister: "bu kırmızı
+ * hangi kırmızı?" sorusunun cevabı belgenin İÇİNDE olmalıdır. Profil
+ * gömülmezse arşiv, on yıl sonra farklı bir renk gösterir.
+ */
+function writeOutputIntent(emitter) {
+  const { sRGBProfile } = require('@fitfak/conformance');
+  const iccId = emitter.addStream({ N: 3 }, sRGBProfile());
+
+  const intentId = emitter.add({ dict: {
+    Type: '/OutputIntent',
+    S: '/GTS_PDFA1',
+    OutputConditionIdentifier: PdfEmitter.literalString('sRGB IEC61966-2.1'),
+    Info: PdfEmitter.literalString('sRGB IEC61966-2.1'),
+    RegistryName: PdfEmitter.literalString('http://www.color.org'),
+    DestOutputProfile: `${iccId} 0 R`
+  } });
+  return `${intentId} 0 R`;
+}
+
+module.exports = {
+  compileToPdf, collectItems, buildContent, ellipsePath,
+  resolveConformance, assignMcids
+};
