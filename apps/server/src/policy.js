@@ -85,7 +85,15 @@ const RATE = {
   windowMs: num('RATE_WINDOW_MS', 60_000),
   maxRequests: num('RATE_MAX', 120),
   /** Pahalı uçlar için ayrı, daha dar pencere. */
-  maxSensitive: num('RATE_MAX_SENSITIVE', 20)
+  maxSensitive: num('RATE_MAX_SENSITIVE', 20),
+  /**
+   * Paylaşımlı sayaç dizini.
+   *
+   * Tanımlıysa sayaçlar dosyada tutulur ve aynı makinedeki BÜTÜN süreçler
+   * aynı sayacı görür. Tanımlı değilse sayaç süreç belleğindedir — tek
+   * süreçli kurulumda doğru, çok süreçlide sınırı süreç sayısıyla çarpar.
+   */
+  dir: (process.env.RATE_LIMIT_DIR || '').trim()
 };
 
 class PolicyError extends Error {
@@ -225,49 +233,65 @@ function authorize(req, routeKey) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Kayan pencereli, bellek içi hız sınırlayıcı.
+ * Kayan pencereli hız sınırlayıcı.
  *
- * Tek süreç için yeterlidir; birden çok örnekli dağıtımda paylaşımlı bir
- * depoya taşınmalıdır. Bunu bilmek, hiç sınır koymamaktan iyidir.
+ * SAYAÇ NEREDE DURUYORSA SINIR ORADA GEÇERLİDİR. Sayaç süreç belleğindeyse,
+ * sunucu iki süreçle çalıştığı anda sınır ikiye katlanır — rapor "sınır var"
+ * der, gerçek başka söyler. Bu yüzden depo takılabilir: varsayılan bellek
+ * deposu tek süreç için, `FileStore` aynı makinedeki bütün süreçler için.
+ *
+ * `RATE_LIMIT_DIR` tanımlıysa dosya deposu kendiliğinden seçilir.
  */
 class RateLimiter {
+  /**
+   * @param {{ windowMs?: number, store?: Object, dir?: string }} [options]
+   */
   constructor(options = {}) {
     this.windowMs = options.windowMs || RATE.windowMs;
-    this.buckets = new Map();       // anahtar → zaman damgaları
-    this.maxKeys = 10_000;          // sınırlayıcının kendisi de sınırlı olmalı
+
+    const dir = options.dir !== undefined ? options.dir : RATE.dir;
+    if (options.store) {
+      this.store = options.store;
+    } else if (dir) {
+      const { FileStore } = require('./ratestore');
+      this.store = new FileStore({ dir });
+    } else {
+      const { MemoryStore } = require('./ratestore');
+      this.store = new MemoryStore();
+    }
+
+    /** Süpürme her istekte değil, arada bir yapılır. */
+    this._sweepEvery = 500;
+    this._sinceSweep = 0;
   }
 
   /** @returns {{ allowed: boolean, remaining: number, retryAfterMs: number }} */
   hit(key, limit) {
     const now = Date.now();
-    let hits = this.buckets.get(key);
-
-    if (!hits) {
-      if (this.buckets.size >= this.maxKeys) this.sweep(now);
-      hits = [];
-      this.buckets.set(key, hits);
-    }
-
-    // Pencere dışına çıkanları at
     const cutoff = now - this.windowMs;
-    while (hits.length && hits[0] < cutoff) hits.shift();
 
-    if (hits.length >= limit) {
-      return { allowed: false, remaining: 0, retryAfterMs: hits[0] + this.windowMs - now };
+    if (++this._sinceSweep >= this._sweepEvery) {
+      this._sinceSweep = 0;
+      this.store.sweep(now, cutoff);
     }
-    hits.push(now);
-    return { allowed: true, remaining: limit - hits.length, retryAfterMs: 0 };
+
+    const { hits, recorded } = this.store.record(key, now, cutoff, limit);
+    if (!recorded) {
+      const oldest = hits.length ? hits[0] : now;
+      return {
+        allowed: false, remaining: 0,
+        retryAfterMs: Math.max(1, oldest + this.windowMs - now)
+      };
+    }
+    return { allowed: true, remaining: Math.max(0, limit - hits.length), retryAfterMs: 0 };
   }
 
-  sweep(now = Date.now()) {
-    const cutoff = now - this.windowMs;
-    for (const [key, hits] of this.buckets) {
-      while (hits.length && hits[0] < cutoff) hits.shift();
-      if (!hits.length) this.buckets.delete(key);
-    }
-  }
+  sweep(now = Date.now()) { this.store.sweep(now, now - this.windowMs); }
 
-  reset() { this.buckets.clear(); }
+  reset() { this.store.clear(); }
+
+  /** Sağlık ucu için: sayaç nerede duruyor, paylaşımlı mı? */
+  describe() { return this.store.describe(); }
 }
 
 /** İstek sahibini tanımlayan anahtar (belirteç varsa o, yoksa IP). */

@@ -164,6 +164,46 @@ uyarı basar.
 `npm install --package-lock-only` ile eşitlendi; temiz bir dizine kopyalanıp
 `npm ci` ile doğrulandı.
 
+### G-13 · Yüksek · Sıkıştırma bombası: piksel sınırı ÇÖZDÜKTEN sonra
+
+| | |
+|---|---|
+| **Dosya** | `packages/pdf/src/media/imageinfo.js` (yeni), `packages/pdf-html/src/assets/resolver.js`, `packages/pdf-scene/src/assets.js` |
+| **Sorun** | Piksel sınırı vardı ama bayt boyutundan tahmin ediliyordu. |
+| **Saldırı** | 40 KB'lık bir PNG başlığında 20000×20000 bildirebilir: çözüldüğünde 1,6 GB. Bayt sınırı bunu geçirir. |
+| **Düzeltme** | Görsel başlığı (PNG IHDR / JPEG SOF) ÇÖZMEDEN okunur; piksel sayısı, bileşen sayısı ve çözülmüş bayt öngörüsü sınıra vurulur (Adam7 taraması için 1,5 katsayı). Sınırı aşan görsel hiç çözülmez. Aynı kod hem sunucuda hem tarayıcı paketinde çalışır: iki yer, iki farklı cevap vermesin. |
+| **Test** | `test/unit/imageinfo.test.js` — 17 test |
+
+### G-14 · Yüksek · Uzak varlıklarda SSRF savunması yoktu
+
+| | |
+|---|---|
+| **Dosya** | `packages/pdf-html/src/assets/netguard.js`, `.../remote.js` (yeni) |
+| **Sorun** | `allowRemoteAssets` bayrağı vardı ama adres denetimi yoktu. |
+| **Saldırı** | Belgedeki `<img src="http://169.254.169.254/latest/meta-data/">` bulut kimlik bilgilerini okur; `http://127.0.0.1:8787/api/...` sunucunun kendi iç uçlarına istek attırır; DNS'i önce iyi sonra kötü adrese çözen bir ad (DNS rebinding) denetimi atlatır. |
+| **Düzeltme** | Uzak varlıklar **varsayılan olarak kapalı** (`REMOTE_ASSET_HOSTS` izin listesi olmadan açılmaz). Ad BİR KEZ çözülür, dönen adreslerin HEPSİ denetlenir ve bağlantı doğrulanmış IP'ye kurulur (`Host` başlığı ve TLS `servername` elle verilir) — çözüm ile bağlantı arasında zaman farkı kalmaz. Özel/bağlantı yerel/çoklu yayın blokları, IPv4-eşlemeli IPv6 (`::ffff:127.0.0.1`), 6to4 ve NAT64 gömülü adresleri reddedilir. Yönlendirmelerin HER adımı yeniden denetlenir; boyut akış sırasında sayılır (`Content-Length`e güvenilmez). |
+| **Test** | `test/unit/netguard.test.js` — 32 test |
+
+### G-15 · Orta · CRL doğrulaması kapsam ve tazelik bilgisini okumuyordu
+
+| | |
+|---|---|
+| **Dosya** | `packages/pades/src/cades/crl.js`, `packages/verify/index.js` |
+| **Sorun** | Seri numarası aranıyordu; listenin o sertifikayı KAPSAYIP kapsamadığı sorulmuyordu. |
+| **Saldırı** | Yalnız CA sertifikalarını kapsayan (`onlyCACerts`) ya da yalnız bir iptal nedenini kapsayan (`onlySomeReasons`) bir CRL, kapsamadığı bir sertifika için "listede yok → geçerli" cevabı üretirdi. |
+| **Düzeltme** | IssuingDistributionPoint, delta CRL bağlantısı (`deltaCRLIndicator` + `cRLNumber`), `certificateIssuer` ile dolayı girdiler, `invalidityDate` ve ReasonFlags çözülür. Kısmi kapsamda sonuç `good` değil `unknown`tur ve gerekçesi bildirilir. Bilinmeyen KRİTİK eklenti taşıyan CRL reddedilir (RFC 5280 §6.3.3). |
+| **Test** | `test/unit/crl.test.js` — 27 test |
+
+### G-16 · Orta · Hız sınırı süreç sayısıyla çarpılıyordu
+
+| | |
+|---|---|
+| **Dosya** | `apps/server/src/ratestore.js` (yeni), `apps/server/src/policy.js` |
+| **Sorun** | Sayaç süreç belleğindeydi. |
+| **Saldırı** | `cluster` ile dört çekirdek açan bir kurulumda "dakikada 20 imza" fiilen 80 olur. Bir denetimin çarpanla çalışması, olmamasından kötüdür: rapor "sınır var" der, gerçek başka söyler. |
+| **Düzeltme** | Depo arayüzü ayrıldı. `RATE_LIMIT_DIR` tanımlıysa sayaçlar dosyada paylaşılır ve aynı makinedeki bütün süreçler aynı sayacı görür. Anahtar dosya adına çevrilmez, SHA-256 ile özetlenir (dizin dışına çıkma yüzeyi kalmasın). Depo yazamazsa süreç içi sayaca düşülür — **sessizce serbest bırakılmaz**: başarısızlık sayılır ve `/api/health` içinde bildirilir. |
+| **Test** | `test/unit/ratelimit.test.js` — 19 test (paylaşım GERÇEK ayrı süreçlerle sınanır) |
+
 ---
 
 ## 3. Yapılmayanlar ve gerekçeleri
@@ -171,21 +211,21 @@ uyarı basar.
 Bunlar bilinen ve **kabul edilmiş** sınırlardır; "destekleniyor" diye
 sunulmamalıdır.
 
-- **Hız sınırlayıcı bellek içidir.** Tek süreç için yeterlidir; birden çok
-  örnekli dağıtımda paylaşımlı bir depoya taşınmalıdır. Bunu bilerek yapmak,
-  hiç sınır koymamaktan iyidir.
+- **Hız sınırı yalnız AYNI MAKİNEDE paylaşılır.** `RATE_LIMIT_DIR`
+  tanımlıysa sayaçlar dosyada tutulur ve o makinedeki bütün süreçler aynı
+  sayacı görür; tanımlı değilse sayaç süreç içindedir ve sınır süreç
+  sayısıyla çarpılır. Hangisinin geçerli olduğu `/api/health` içinde
+  bildirilir. Birden çok MAKİNEYE yayılan bir kurulumda paylaşımlı bir depo
+  (Redis vb.) gerekir; depo arayüzü bunun için ayrılmıştır.
+- **Dosya deposu kilit kullanmaz.** İki süreç aynı anda son kotayı okursa
+  sınır bir istek aşılabilir (N süreçte en fazla N-1). Kilit almak, çekişme
+  anında olay döngüsünü bloklardı; sapma bilinerek kabul edilmiştir.
 - **Belirteçler düz metin ortam değişkenindedir.** Bir sır yöneticisi
   (secret manager) kullanılmıyor.
-- **Uzak kaynaklar (http/https görseller) desteklenmiyor.** Kum havuzu
-  bunları reddeder; `allowRemoteAssets` bayrağı vardır ama SSRF savunması
-  henüz uygulanmadığı için **açılmamalıdır**.
-- **Görsel piksel sınırı (`maxImagePixels`) tanımlıdır ama çözme aşamasında
-  değil, bayt boyutu üzerinden zorlanır.** Aşırı sıkıştırılmış bir PNG hâlâ
-  beklenenden çok bellek kullanabilir.
+- **Uzak kaynaklar VARSAYILAN OLARAK KAPALIDIR.** `REMOTE_ASSET_HOSTS` ile
+  bir izin listesi verilmeden açılamaz (bkz. G-14).
 - **Tarayıcı `/api/verify` ucu gerçek bir doğrulama yapmaz.** Zincir/kayıt
   bağlantısı kurulmamıştır ve uç bunu açıkça söyler.
-- **CRL doğrulaması OCSP kadar derin değildir.** Dizge araması yapılmaz ama
-  delta CRL ve dağıtım noktası eşleştirmesi tam değildir.
 
 ---
 
@@ -195,6 +235,10 @@ sunulmamalıdır.
 |---|---|---|
 | `test/unit/security.test.js` | 28 | Dosya yolu kum havuzu, PKCS#12 sınırları, sunucu politikası |
 | `test/e2e/08-security.test.js` | 38 | OCSP, DSS/LTV, RFC 3161, HTTP sertleştirme, tarayıcı sunucusu |
+| `test/unit/imageinfo.test.js` | 17 | Sıkıştırma bombası: piksel/çözülmüş bayt sınırı |
+| `test/unit/netguard.test.js` | 32 | SSRF: özel ağ blokları, IPv4-eşlemeli IPv6, yönlendirme |
+| `test/unit/crl.test.js` | 27 | RFC 5280 CRL kapsamı, delta, neden kodları |
+| `test/unit/ratelimit.test.js` | 19 | Hız sınırı depoları, süreçler arası paylaşım |
 
 Yardımcı: `test/e2e/helpers/rogue-tsa.js` — kuralları kasten çiğneyen ama
 yapısal olarak geçerli bir RFC 3161 jetonu üretir. Kendi TSA sunucumuz böyle

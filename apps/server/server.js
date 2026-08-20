@@ -62,7 +62,15 @@ const CONFIG = {
 
 const sessions = new Map();
 
-/** Hız sınırlayıcı — bellek içi, tek süreç. */
+/**
+ * Hız sınırlayıcı.
+ *
+ * `RATE_LIMIT_DIR` tanımlıysa sayaçlar dosyada paylaşılır ve aynı makinedeki
+ * bütün süreçler AYNI sayacı görür. Tanımlı değilse sayaç süreç içindedir:
+ * tek süreçli kurulumda doğru, `cluster` ile çalışan bir kurulumda sınırı
+ * süreç sayısıyla çarpar. Hangisi olduğu `/api/health` içinde bildirilir —
+ * işletmecinin bunu tahmin etmesi gerekmesin.
+ */
 const rateLimiter = new policy.RateLimiter();
 
 /* ------------------------------------------------------------------ */
@@ -256,6 +264,14 @@ const routes = {
       fonts: fontRegistry().describe(),
       serverSidePfx: CONFIG.allowServerSidePfx,
       remoteAssets: policy.REMOTE.enabled,
+      // Sayaç nerede duruyor? "Sınır var" demek yetmez; sınırın kaç süreçte
+      // geçerli olduğu da bilinmelidir.
+      rateLimit: {
+        windowMs: policy.RATE.windowMs,
+        maxRequests: policy.RATE.maxRequests,
+        maxSensitive: policy.RATE.maxSensitive,
+        store: rateLimiter.describe()
+      },
       maxBodyBytes: CONFIG.maxBodyBytes
     });
   },
