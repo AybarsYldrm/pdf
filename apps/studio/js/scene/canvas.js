@@ -265,6 +265,11 @@ export class SceneCanvas {
         // Kullanıcı metni YALNIZCA textContent ile yazılır
         inner.appendChild(el('span', { text: textOf(node) }));
         box.appendChild(inner);
+
+        // `autoHeight`: kutu metin kadar görünür. Ölçüm tarayıcınındır ve
+        // sunucudaki ölçümden birkaç yüzde sapabilir; MODEL değişmez,
+        // yalnız görüntü uyar. Gerçek yüksekliği derleyici hesaplar.
+        if (node.autoHeight) box.style.height = 'auto';
         break;
       }
 
@@ -320,7 +325,7 @@ export class SceneCanvas {
       return;
     }
 
-    const frames = ids.map((id) => this.scene.absoluteFrame(id)).filter(Boolean);
+    const frames = ids.map((id) => this._selectionFrame(id)).filter(Boolean);
     if (!frames.length) {
       this.handleLayer.classList.add('is-hidden');
       return;
@@ -344,6 +349,28 @@ export class SceneCanvas {
           el('div', { class: `sc-handle sc-handle--${dir}`, 'data-handle': dir }));
       }
     }
+  }
+
+  /**
+   * Seçim çerçevesi.
+   *
+   * `autoHeight` metin kutularında modeldeki yükseklik BAŞLANGIÇ değeridir;
+   * gerçek yüksekliği sunucudaki derleyici hesaplar. Kullanıcı yazarken
+   * tutamakların metnin altında kalmaması için burada TARAYICININ ölçtüğü
+   * yükseklik kullanılır. Model DEĞİŞMEZ: ölçüm sunum tarafına aittir ve
+   * her tuş vuruşunda geçmişe adım yazmak geri almayı kullanılmaz kılardı.
+   */
+  _selectionFrame(id) {
+    const frame = this.scene.absoluteFrame(id);
+    if (!frame) return null;
+
+    const node = this.scene.node(id);
+    const box = this._els.get(id);
+    if (node && node.type === 'text' && node.autoHeight && box && !frame.rotation) {
+      const measured = box.getBoundingClientRect().height / this.zoom;
+      if (measured > 0.5) return { ...frame, height: measured };
+    }
+    return frame;
   }
 
   /** Kılavuz çizgilerini gösterir (yapışma sırasında). */
@@ -550,12 +577,20 @@ export class SceneCanvas {
         if (axes.y < 0) y = o.frame.y + (o.frame.height - height);
       }
 
-      this.scene.updateNode(o.id, {
+      const patch = {
         frame: {
           x: this.units.round(x), y: this.units.round(y),
           width: this.units.round(width), height: this.units.round(height)
         }
-      });
+      };
+
+      // Kullanıcı YÜKSEKLİĞİ elle değiştirdiyse "metne göre yükseklik"
+      // kapanır: iki otorite olamaz. Yalnız genişlik değiştiyse otomatik
+      // yükseklik anlamını korur (metin yeniden akar).
+      const node = this.scene.node(o.id);
+      if (axes.y && node && node.autoHeight) patch.autoHeight = false;
+
+      this.scene.updateNode(o.id, patch);
     }
     this.render();
   }

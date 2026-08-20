@@ -19,6 +19,7 @@
 const { Scene } = require('../scene');
 const { AssetManager } = require('../assets');
 const { round } = require('../units');
+const { groupParagraphs } = require('./paragraphs');
 const { colorToHex } = require('../validate');
 
 /** Aynı satırdaki parçaları birleştirmek için eşik (punto). */
@@ -89,6 +90,7 @@ function importFromHtml(o = {}) {
 
   const warnings = [...(layout.warnings || [])];
   const assets = new AssetManager();
+  let mergedLines = false;
 
   const marginLeft = layout.page.margin.left;
   const marginTop = layout.page.margin.top;
@@ -147,22 +149,29 @@ function importFromHtml(o = {}) {
 
       // Metinler en sonda: satır birleştirme sıralı bir liste ister
       texts.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-      for (const g of mergeTextItems(texts)) {
-        const ascent = ascentOf(g.face, g.fontSize);
-        scene.addNode(Scene.createNode('text', {
-          x: round(g.x),
-          y: round(g.y - ascent),
-          width: round(Math.max(4, g.right - g.x + 1)),
-          height: round(g.fontSize * 1.4),
-          text: g.text,
-          fontFamily: (g.face && g.face.family) || 'Ubuntu',
-          fontSize: round(g.fontSize),
-          color: g.colorKey,
-          lineHeight: 1.4,
-          letterSpacing: g.letterSpacing || 0,
-          bold: !!(g.face && g.face.weight >= 600),
-          italic: !!(g.face && g.face.style === 'italic')
-        }), { pageId });
+      const lines = mergeTextItems(texts);
+
+      if (o.paragraphs === false) {
+        for (const g of lines) addTextNode(scene, pageId, g, g, false);
+        return;
+      }
+
+      // Ardışık satırlar paragrafa toplanır: akış belgesinden gelen metin
+      // sahnede de paragraf olarak durmalıdır. Biçim (aile, ağırlık, renk)
+      // değişimi blok değişimi sayılır.
+      const paragraphs = groupParagraphs(lines.map((g) => ({
+        x: g.x, right: g.right, baseline: g.y, fontSize: g.fontSize,
+        text: g.text, source: g,
+        styleKey: [
+          (g.face && g.face.family) || '', (g.face && g.face.weight) || 400,
+          (g.face && g.face.style) || 'normal', g.colorKey || '',
+          g.letterSpacing || 0
+        ].join('|')
+      })));
+
+      for (const para of paragraphs) {
+        if (para.merged) mergedLines = true;
+        addTextNode(scene, pageId, para.lines[0].source, para, true);
       }
     });
 
@@ -180,13 +189,53 @@ function importFromHtml(o = {}) {
 
   scene.history.clear();     // içe aktarma bir geri alma adımı değildir
 
+  if (mergedLines) {
+    warnings.push({
+      code: 'WARN_IMPORT_LINES_MERGED', type: 'import',
+      message: 'Ardışık satırlar paragrafa toplandı ve kutular metne göre ' +
+               'uzuyor; kaynaktaki SABİT satır sonları korunmadı.'
+    });
+  }
   warnings.push({
     code: 'WARN_IMPORT_FLATTENED', type: 'import',
-    message: 'HTML sahneye DÜZLEŞTİRİLEREK aktarıldı: metin kutuları artık ' +
-             'akmaz, uzayan metin sonrakini itmez.'
+    message: 'HTML sahneye DÜZLEŞTİRİLEREK aktarıldı: paragraflar kendi ' +
+             'içinde yeniden akar ama kutular birbirini İTMEZ.'
   });
 
   return { scene, warnings };
+}
+
+/**
+ * Metin düğümünü ekler.
+ *
+ * @param {Object} style biçimi taşıyan satır (yüz, renk, harf aralığı)
+ * @param {Object} box   yerleşimi taşıyan kayıt (satır ya da paragraf)
+ * @param {boolean} auto kutu metne göre uzasın mı?
+ */
+function addTextNode(scene, pageId, style, box, auto) {
+  const fontSize = box.fontSize || style.fontSize;
+  const ascent = ascentOf(style.face, fontSize);
+  const lineHeight = box.lineHeight || 1.4;
+  const lineCount = box.lines ? box.lines.length : 1;
+
+  scene.addNode(Scene.createNode('text', {
+    x: round(box.x),
+    y: round((box.baseline !== undefined ? box.baseline : box.y) - ascent),
+    // +1 punto: ölçüm ile çizim arasındaki yuvarlama farkı son sözcüğü
+    // alt satıra atmasın.
+    width: round(Math.max(4, box.right - box.x + 1)),
+    height: round(fontSize * lineHeight * lineCount),
+    text: box.text,
+    fontFamily: (style.face && style.face.family) || 'Ubuntu',
+    fontSize: round(fontSize),
+    color: style.colorKey,
+    lineHeight,
+    align: box.align || 'left',
+    letterSpacing: style.letterSpacing || 0,
+    bold: !!(style.face && style.face.weight >= 600),
+    italic: !!(style.face && style.face.style === 'italic'),
+    autoHeight: !!auto
+  }), { pageId });
 }
 
 function ascentOf(face, fontSize) {

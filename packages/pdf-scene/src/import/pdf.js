@@ -31,6 +31,7 @@ const { round } = require('../units');
 const { SceneError } = require('../validate');
 const geometry = require('../geometry');
 const { collectGraphics, placeUnitSquare } = require('./pdfgraphics');
+const { groupParagraphs } = require('./paragraphs');
 const { extractImage } = require('./pdfimage');
 
 /** Aynı satır sayılma eşiği (punto). */
@@ -85,6 +86,7 @@ function importFromPdf(pdfBuffer, o = {}) {
 
   const fontFamily = o.fontFamily || 'Ubuntu';
   let sizeMismatch = false;
+  let mergedLines = false;
 
   /**
    * Taban çizgisi → kutu üst kenarı için yükselti oranı.
@@ -161,16 +163,45 @@ function importFromPdf(pdfBuffer, o = {}) {
 
       const groups = o.mergeLines === false ? converted.map(single) : mergeLines(converted);
 
-      for (const g of groups) {
+      if (o.paragraphs === false) {
+        // Satır satır: kâğıttaki yerleşime en sadık ama DÜZENLENEMEZ hâl.
+        for (const g of groups) {
+          scene.addNode(Scene.createNode('text', {
+            x: round(g.x),
+            y: round(g.baseline - g.fontSize * ascentRatio),
+            width: round(Math.max(4, g.width)),
+            height: round(g.fontSize * 1.4),
+            text: g.text,
+            fontFamily,
+            fontSize: round(g.fontSize),
+            lineHeight: 1.4
+          }), { pageId });
+        }
+        continue;
+      }
+
+      const paragraphs = groupParagraphs(groups.map((g) => ({
+        x: g.x, right: g.x + Math.max(4, g.width),
+        baseline: g.baseline, fontSize: g.fontSize, text: g.text,
+        // PDF metin çıkarıcısı yüz bilgisi vermez; punto tek ayırıcıdır.
+        styleKey: 'pdf'
+      })));
+
+      for (const para of paragraphs) {
+        if (para.merged) mergedLines = true;
         scene.addNode(Scene.createNode('text', {
-          x: round(g.x),
-          y: round(g.baseline - g.fontSize * ascentRatio),
-          width: round(Math.max(4, g.width)),
-          height: round(g.fontSize * 1.4),
-          text: g.text,
+          x: round(para.x),
+          y: round(para.baseline - para.fontSize * ascentRatio),
+          width: round(Math.max(4, para.right - para.x)),
+          // Yükseklik metinden hesaplanacak; buradaki değer yalnız
+          // başlangıçtır ve derleyici onu günceller.
+          height: round(para.fontSize * para.lineHeight * para.lines.length),
+          text: para.text,
           fontFamily,
-          fontSize: round(g.fontSize),
-          lineHeight: 1.4
+          fontSize: round(para.fontSize),
+          lineHeight: para.lineHeight,
+          align: para.align,
+          autoHeight: true
         }), { pageId });
       }
     }
@@ -185,12 +216,19 @@ function importFromPdf(pdfBuffer, o = {}) {
                've ilk sayfanınki kullanıldı.'
     });
   }
+  if (mergedLines) {
+    warnings.push({
+      code: 'WARN_IMPORT_LINES_MERGED',
+      message: 'Ardışık satırlar paragrafa toplandı ve kutular metne göre ' +
+               'uzuyor; kaynaktaki SABİT satır sonları korunmadı.'
+    });
+  }
   warnings.push({
     code: 'WARN_IMPORT_FLATTENED',
     message: o.graphics === false
       ? 'Yalnız metin ve sayfa ölçüleri aktarıldı; çizimler istenmedi.'
-      : 'Metin, çizim ve görseller aktarıldı; gömülü fontlar aktarılmadı ve ' +
-        'metin artık akmaz — kutu büyüdükçe sonraki kutuyu itmez.'
+      : 'Metin, çizim ve görseller aktarıldı; gömülü fontlar aktarılmadı. ' +
+        'Paragraflar kendi içinde yeniden akar ama kutular birbirini İTMEZ.'
   });
 
   return { scene, warnings };

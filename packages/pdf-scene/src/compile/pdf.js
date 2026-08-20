@@ -134,6 +134,10 @@ function emitNode(node, abs, ctx, out) {
       const res = textItems(node, { x: abs.x, y: abs.y }, ctx);
       for (const item of res.items) out.items.push({ ...item, ...common, opacity: node.opacity });
       for (const link of res.links) out.links.push(link);
+      // Kutu metne göre uzadıysa MUTLAK çerçeve de uzamalıdır: etiketleme
+      // ve okuma sırası bu çerçeveye bakar, kâğıttaki gerçek alanı görmezse
+      // yanlış sıralar.
+      if (node.autoHeight) abs.height = round(res.measuredHeight);
       if (res.overflow) {
         out.warnings.push({
           code: 'WARN_TEXT_OVERFLOW', nodeId: node.id,

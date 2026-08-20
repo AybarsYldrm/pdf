@@ -26,7 +26,10 @@ const FIELDS = {
     { key: 'bold', label: 'Kalın', kind: 'bool' },
     { key: 'italic', label: 'Eğik', kind: 'bool' },
     { key: 'letterSpacing', label: 'Harf aralığı', kind: 'number', min: -20, max: 100, step: 0.1 },
-    { key: 'padding', label: 'İç boşluk', kind: 'number', min: 0, max: 200, step: 1 }
+    { key: 'padding', label: 'İç boşluk', kind: 'number', min: 0, max: 200, step: 1 },
+    // Kutu metne göre uzar: paragrafa cümle eklemek altındaki her şeyi elle
+    // kaydırmayı gerektirmesin.
+    { key: 'autoHeight', label: 'Metne göre yükseklik', kind: 'bool' }
   ],
   rect: [
     { key: 'fill', label: 'Dolgu', kind: 'color' },

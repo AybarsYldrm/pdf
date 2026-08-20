@@ -245,6 +245,9 @@ function nodeElement(node, ctx) {
         class: 'sn-text', 'data-id': node.id,
         style: style({
           ...base,
+          // `autoHeight`: kutu metin kadar uzar. Sabit yükseklik yazmak,
+          // önizlemenin PDF'ten farklı kırpılması demek olurdu.
+          height: node.autoHeight ? 'auto' : base.height,
           padding: node.padding || undefined,
           'box-sizing': 'border-box',
           display: 'flex',

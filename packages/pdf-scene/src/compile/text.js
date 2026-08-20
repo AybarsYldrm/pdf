@@ -45,7 +45,12 @@ function toRuns(node) {
 function layoutText(node, ctx) {
   const { fonts, resolveFace } = ctx;
   const padding = node.padding || 0;
-  const maxWidth = Math.max(0, node.frame.width - padding * 2);
+  // Satır sonu kararı KAYAN NOKTA EŞİTLİĞİNE bırakılmaz. Kutu genişliği
+  // tam olarak metnin ölçüsü kadarsa (içe aktarılan paragraflarda tipik
+  // durum) 149.70000000000002 > 149.7 karşılaştırması sözcüğü alt satıra
+  // atardı. 1/100 punto taşma, taşma değildir.
+  const EPSILON = 0.01;
+  const maxWidth = Math.max(0, node.frame.width - padding * 2) + EPSILON;
   const baseSize = node.fontSize || 11;
   const lineHeight = baseSize * (node.lineHeight || 1.4);
   const spacing = node.letterSpacing || 0;
@@ -134,11 +139,18 @@ function textItems(node, origin, ctx) {
   const { lines, lineHeight, totalHeight } = layoutText(node, ctx);
   const padding = node.padding || 0;
   const boxWidth = Math.max(0, node.frame.width - padding * 2);
-  const boxHeight = Math.max(0, node.frame.height - padding * 2);
+
+  // `autoHeight`: kutu metnin kendisidir. Dikey hizalama anlamsızdır ve
+  // taşma diye bir şey yoktur — kutu metin kadar uzar.
+  const boxHeight = node.autoHeight
+    ? totalHeight
+    : Math.max(0, node.frame.height - padding * 2);
 
   let top = origin.y + padding;
-  if (node.valign === 'middle') top += Math.max(0, (boxHeight - totalHeight) / 2);
-  else if (node.valign === 'bottom') top += Math.max(0, boxHeight - totalHeight);
+  if (!node.autoHeight) {
+    if (node.valign === 'middle') top += Math.max(0, (boxHeight - totalHeight) / 2);
+    else if (node.valign === 'bottom') top += Math.max(0, boxHeight - totalHeight);
+  }
 
   const items = [];
   const links = [];
@@ -172,7 +184,13 @@ function textItems(node, origin, ctx) {
     }
   });
 
-  return { items, links, overflow: totalHeight > boxHeight };
+  return {
+    items, links,
+    overflow: !node.autoHeight && totalHeight > boxHeight,
+    // Ölçülen yükseklik: `autoHeight` düğümlerde çerçeve bununla güncellenir
+    // ki seçim kutusu ve etiketleme metnin gerçek alanını göstersin.
+    measuredHeight: totalHeight + padding * 2
+  };
 }
 
 module.exports = { layoutText, textItems, ascentRatio, toRuns };

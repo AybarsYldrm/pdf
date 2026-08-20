@@ -65,7 +65,19 @@ const NODE_TYPES = {
       bold:       { type: 'boolean', default: false },
       italic:     { type: 'boolean', default: false },
       letterSpacing: { type: 'length', default: 0, min: -20, max: 100 },
-      padding:    { type: 'length', default: 0, min: 0, max: 1000 }
+      padding:    { type: 'length', default: 0, min: 0, max: 1000 },
+      /**
+       * Kutu YÜKSEKLİĞİ metinden hesaplanır.
+       *
+       * Serbest yerleşimde metin akmaz: kutu sabittir, taşan metin taşar.
+       * Ama bir PARAGRAF için bu yanlış davranıştır — kullanıcı cümle
+       * eklediğinde kutunun büyümesini bekler. `autoHeight` bu beklentiyi
+       * karşılar: genişlik kullanıcının, yükseklik metnindir.
+       *
+       * Dikey hizalama bu durumda anlamsızdır (kutu zaten metin kadardır)
+       * ve derleyici onu `top` sayar.
+       */
+      autoHeight: { type: 'boolean', default: false }
     }
   },
 

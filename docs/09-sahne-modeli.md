@@ -77,7 +77,7 @@ Her düğümde ortak alanlar: `id`, `type`, `name`, `frame {x,y,width,height}`,
 
 | Tip | Tipe özgü alanlar |
 |---|---|
-| `text` | `text`, `runs[]`, `fontFamily`, `fontSize`, `lineHeight`, `color`, `align`, `valign`, `bold`, `italic`, `letterSpacing`, `padding` |
+| `text` | `text`, `runs[]`, `fontFamily`, `fontSize`, `lineHeight`, `color`, `align`, `valign`, `bold`, `italic`, `letterSpacing`, `padding`, `autoHeight` |
 | `rect` | `fill`, `stroke`, `strokeWidth`, `radius` |
 | `ellipse` | `fill`, `stroke`, `strokeWidth` |
 | `line` | `stroke`, `strokeWidth`, `dash` — çerçevenin köşegeni üzerinde tanımlıdır |
@@ -195,6 +195,12 @@ kendi içerik akışı kurulur:
 (sol-alt) hem sahne (sol-üst) koordinatlarıyla taşır ve alan adı
 `signatureSlots` — `@fitfak/pdf-html` manifestiyle aynı. İmzalama tarafı
 belgenin sahneden mi HTML'den mi geldiğini bilmek zorunda değildir.
+
+**Akan metin kutuları.** `autoHeight: true` olan metin düğümünde genişlik
+kullanıcının, YÜKSEKLİK METNİNDİR: derleyici yerleşimden hesaplar, taşma
+diye bir şey olmaz, dikey hizalama yok sayılır. İçe aktarılan paragraflar
+bu bayrakla gelir; kullanıcı kutuyu dikey olarak elle boyutlandırırsa
+bayrak düşer (iki otorite olamaz).
 
 **Vektör yollar** `path` düğümünde taşınır. `d` düğümün KENDİ uzayındadır;
 derleyici veriden sınır kutusunu hesaplar ve çerçeveye oturtur — böylece
@@ -335,10 +341,16 @@ uçları mevcut gövde/sayım sınırlarına ve hız sınırına tabidir.
 
 Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
 
-- **İçe aktarma bir düzleştirmedir.** Akış belgesindeki "paragraf" kavramı
-  sahnede yoktur. İçe aktarılan belge düzenlenebilir ama artık akmaz: metin
-  uzayınca sonraki kutuyu itmez. Uyarı olarak bildirilir
-  (`WARN_IMPORT_FLATTENED`).
+- **İçe aktarma bir düzleştirmedir.** Paragraflar kendi içinde yeniden akar
+  (`autoHeight`) ama KUTULAR BİRBİRİNİ İTMEZ: bir paragraf uzayınca altındaki
+  paragrafın üstüne biner. Akış belgesindeki "sonraki bloğu aşağı it"
+  davranışı sahnede yoktur ve olmamalıdır — serbest yerleşimin tanımı budur.
+  `WARN_IMPORT_FLATTENED` ile bildirilir.
+- **Paragraf gruplama bir TAHMİNDİR.** Ardışık satırlar punto, biçim, satır
+  aralığı ve sütun örtüşmesine bakılarak birleştirilir; kaynaktaki SABİT
+  satır sonları korunmaz (`WARN_IMPORT_LINES_MERGED`). Adres bloğu gibi
+  satır sonu anlamlı metinlerde satırlar tek paragrafa akar. Kural dar
+  tutulmuştur: şüphede kalınırsa satır ayrı bırakılır.
 - **PDF içe aktarmada gömülü fontlar aktarılmaz.** Metin, sahnenin
   yapılandırdığı aileyle yeniden çizilir; satır genişlikleri birebir aynı
   olmayabilir. Kırpma bölgeleri (`WARN_IMPORT_CLIP`), gradyanlar
