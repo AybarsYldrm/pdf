@@ -6,6 +6,7 @@
   <title>FITFAK Belge Studio</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/scene.css">
 </head>
 <body>
 
@@ -17,6 +18,7 @@
 
   <nav class="tabs" id="tabs" role="tablist" aria-label="Çalışma alanları">
     <button class="tab is-active" role="tab" data-tab="design"  aria-selected="true">Tasarla</button>
+    <button class="tab" role="tab" data-tab="scene"  aria-selected="false">Serbest tasarım</button>
     <button class="tab" role="tab" data-tab="edit"   aria-selected="false">Düzenle</button>
     <button class="tab" role="tab" data-tab="sign"   aria-selected="false">İmzala</button>
     <button class="tab" role="tab" data-tab="verify" aria-selected="false">Doğrula</button>
@@ -84,6 +86,57 @@
       <p class="hint" id="renderHint">Önizleme, PDF motoruyla <strong>aynı CSS</strong> ile çizilir.</p>
       <p class="hint">PDF/A arşivlenebilirlik (gömülü font + ICC profili),
         PDF/UA erişilebilirlik (etiketli yapı ağacı) demektir.</p>
+    </section>
+
+    <!-- Serbest tasarım (sahne editörü) -->
+    <section class="pane is-hidden" data-pane="scene">
+      <h2 class="pane__title">Belge</h2>
+
+      <div class="pane__actions pane__actions--wrap">
+        <button class="btn btn--sm" id="btnSceneNew" type="button">Yeni</button>
+        <button class="btn btn--sm" id="btnSceneExport" type="button">JSON dışa aktar</button>
+        <label class="btn btn--sm sc-tools__file">
+          JSON içe aktar
+          <input id="sceneImportJson" type="file" accept=".json,application/json" hidden>
+        </label>
+      </div>
+
+      <h2 class="pane__title">İçe aktar</h2>
+      <label class="field">
+        <span class="field__label">PDF'ten</span>
+        <input id="sceneImportPdf" class="input input--file" type="file" accept=".pdf">
+      </label>
+      <div class="pane__actions">
+        <button class="btn btn--sm" id="btnSceneFromHtml" type="button">
+          Tasarla sekmesindeki HTML'den
+        </button>
+      </div>
+      <p class="hint">İçe aktarma bir <strong>düzleştirmedir</strong>: metin kutuları
+        artık akmaz, uzayan metin sonrakini itmez.</p>
+
+      <h2 class="pane__title">Çıktı</h2>
+      <div class="pane__actions pane__actions--wrap">
+        <button class="btn btn--primary" id="btnSceneRender" type="button">PDF üret</button>
+        <button class="btn" id="btnSceneDownload" type="button" disabled>İndir</button>
+        <button class="btn" id="btnSceneToSign" type="button" disabled>İmzaya gönder</button>
+      </div>
+      <p class="hint">Tuval bir <strong>önizlemedir</strong>; PDF sahnenin kendisinden,
+        sunucuda derlenir. Sahnedeki koordinat PDF'teki koordinattır.</p>
+
+      <h2 class="pane__title">Özellikler</h2>
+      <div id="sceneInspector" class="sceneinsp"></div>
+
+      <h2 class="pane__title">Kısayollar</h2>
+      <dl class="kv kv--compact">
+        <dt>Ctrl+Z / Ctrl+Shift+Z</dt><dd>Geri al / yinele</dd>
+        <dt>Ctrl+C / X / V</dt><dd>Kopyala / kes / yapıştır</dd>
+        <dt>Ctrl+D</dt><dd>Çoğalt</dd>
+        <dt>Ctrl+G / Ctrl+Shift+G</dt><dd>Grupla / çöz</dd>
+        <dt>Ok tuşları</dt><dd>1 pt kaydır (Shift ile 10 pt)</dd>
+        <dt>Shift + sürükle</dt><dd>Eksene kilitle</dd>
+        <dt>Alt + tık</dt><dd>Grubun içine gir</dd>
+        <dt>Delete</dt><dd>Sil</dd>
+      </dl>
     </section>
 
     <!-- Düzenle -->
@@ -269,6 +322,13 @@
       <iframe class="preview" id="preview" title="Belge önizlemesi" sandbox="allow-same-origin"></iframe>
       <!-- PDF önizlemesi: tarayıcının yerleşik görüntüleyicisi (blob: URL) -->
       <iframe class="preview is-hidden" id="pdfPreview" title="PDF önizlemesi"></iframe>
+    </div>
+
+    <!-- Sahne editörü tuvali — yalnız "Serbest tasarım" sekmesinde görünür -->
+    <div class="sc-shell is-hidden" id="sceneShell">
+      <div class="sc-toolbar" id="sceneToolbar"></div>
+      <div class="sc-pages" id="scenePages"></div>
+      <div class="sc-canvas" id="sceneCanvas"></div>
     </div>
   </section>
 

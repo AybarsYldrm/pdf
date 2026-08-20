@@ -64,6 +64,14 @@ export const api = {
   conformance:   (pdfBytes, profiles) =>
                    request('/api/conformance/check', { pdf: toBase64(pdfBytes), profiles }),
   stampPreview:  (payload) => request('/api/stamp/preview', payload),
+
+  /* Sahne (görsel editör) */
+  sceneRender:      (payload) => request('/api/scene/render', payload),
+  sceneImportPdf:   (pdfBytes, password) =>
+                      request('/api/scene/import/pdf',
+                        { pdf: toBase64(pdfBytes), password: password || undefined }),
+  sceneImportHtml:  (payload) => request('/api/scene/import/html', payload),
+
   pfxIdentities: (pfxBytes, password) =>
                    request('/api/pfx/identities', { pfx: toBase64(pfxBytes), password }),
   signPrepare:   (payload) => request('/api/sign/prepare', payload),

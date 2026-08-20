@@ -1,0 +1,299 @@
+/* ==================================================================
+   Görsel editör (sahne) — tuval, tutamaklar, katmanlar
+   ------------------------------------------------------------------
+   Renkler app.css'in değişkenlerinden gelir: editörün kendi paleti
+   olsaydı tema değiştirince yarısı değişirdi.
+   ================================================================== */
+
+.sc-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.sc-shell.is-hidden { display: none; }
+
+.sc-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ── Araç çubuğu ─────────────────────────────────────────────── */
+
+.sc-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line, #d8dde6);
+  background: var(--surface, #fff);
+}
+
+.sc-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sc-tools--right { margin-left: auto; }
+
+.sc-tools__file {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── Sayfa şeridi ────────────────────────────────────────────── */
+
+.sc-pages {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line, #d8dde6);
+  overflow-x: auto;
+}
+
+.sc-page {
+  min-width: 30px;
+  height: 26px;
+  border: 1px solid var(--line, #d8dde6);
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  color: var(--ink, #1a1d23);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sc-page.is-active {
+  background: var(--accent, #1f3a63);
+  border-color: var(--accent, #1f3a63);
+  color: #fff;
+}
+
+.sc-page--add, .sc-page--del { font-weight: 700; }
+
+/* ── Tuval ───────────────────────────────────────────────────── */
+
+.sc-surface {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: var(--canvas-bg, #eceff4);
+  outline: none;
+  /* Sürükleme sırasında metin seçimi imleci titretir */
+  user-select: none;
+}
+
+.sc-sheet {
+  position: relative;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 18%);
+}
+
+.sc-margin {
+  position: absolute;
+  border: 1px dashed rgb(31 58 99 / 22%);
+  pointer-events: none;
+}
+
+.sc-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+/* ── Düğümler ────────────────────────────────────────────────── */
+
+.sc-node {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: move;
+}
+
+.sc-node.is-locked { cursor: default; }
+.sc-node.is-hidden-node { pointer-events: none; }
+
+.sc-node.is-selected { outline: 1px solid var(--accent, #1f3a63); }
+
+.sc-shape, .sc-img { width: 100%; height: 100%; display: block; box-sizing: border-box; }
+
+.sc-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 0;
+}
+
+.sc-text {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.sc-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line, #c8ccd4);
+  color: var(--muted, #8b93a7);
+  font-size: 10px;
+  box-sizing: border-box;
+}
+
+.sc-slot {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px dashed #8b93a7;
+  border-radius: 2px;
+  color: #8b93a7;
+  font-size: 10px;
+  box-sizing: border-box;
+  background: rgb(139 147 167 / 6%);
+}
+
+.sc-slot__role { font-size: 8px; opacity: .8; }
+
+.sc-group {
+  width: 100%;
+  height: 100%;
+  border: 1px dotted rgb(31 58 99 / 35%);
+  box-sizing: border-box;
+}
+
+/* ── Seçim tutamakları ───────────────────────────────────────── */
+
+.sc-handles {
+  position: absolute;
+  border: 1px solid var(--accent, #1f3a63);
+  pointer-events: none;
+}
+
+.sc-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  background: #fff;
+  border: 1px solid var(--accent, #1f3a63);
+  border-radius: 1px;
+  pointer-events: auto;
+}
+
+.sc-handle--nw { left: 0;    top: 0;    cursor: nwse-resize; }
+.sc-handle--n  { left: 50%;  top: 0;    cursor: ns-resize; }
+.sc-handle--ne { left: 100%; top: 0;    cursor: nesw-resize; }
+.sc-handle--e  { left: 100%; top: 50%;  cursor: ew-resize; }
+.sc-handle--se { left: 100%; top: 100%; cursor: nwse-resize; }
+.sc-handle--s  { left: 50%;  top: 100%; cursor: ns-resize; }
+.sc-handle--sw { left: 0;    top: 100%; cursor: nesw-resize; }
+.sc-handle--w  { left: 0;    top: 50%;  cursor: ew-resize; }
+
+/* ── Yapışma kılavuzları ve seçim dikdörtgeni ────────────────── */
+
+.sc-guides { position: absolute; inset: 0; }
+
+.sc-guide { position: absolute; background: #e0574f; }
+.sc-guide--x { top: 0; bottom: 0; width: 1px; }
+.sc-guide--y { left: 0; right: 0; height: 1px; }
+
+.sc-marquee {
+  position: absolute;
+  border: 1px dashed var(--accent, #1f3a63);
+  background: rgb(31 58 99 / 8%);
+}
+
+/* ── Özellik paneli ──────────────────────────────────────────── */
+
+.insp { margin-bottom: 14px; }
+
+.insp__title {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted, #8b93a7);
+}
+
+.insp__row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  align-items: center;
+}
+
+.insp__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.input--num { width: 72px; }
+.input--color { width: 40px; padding: 0; height: 26px; }
+.input--area { min-height: 70px; resize: vertical; font-family: inherit; }
+
+/* ── Katman listesi ──────────────────────────────────────────── */
+
+.layers { list-style: none; margin: 0 0 10px; padding: 0; max-height: 220px; overflow: auto; }
+
+.layers__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.layers__item:hover { background: rgb(31 58 99 / 6%); }
+.layers__item.is-selected { background: rgb(31 58 99 / 12%); }
+
+.layers__type {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted, #8b93a7);
+  min-width: 62px;
+}
+
+.layers__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layers__btn {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted, #8b93a7);
+  padding: 0 2px;
+}
+
+.check--inline { display: inline-flex; align-items: center; gap: 4px; }

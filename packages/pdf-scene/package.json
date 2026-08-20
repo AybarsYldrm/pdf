@@ -6,7 +6,8 @@
   "author": { "email": "network@fitfak.net", "name": "Aybars Yıldırım", "url": "https://aybars.net.tr" },
   "license": "MIT",
   "engines": { "node": ">=20.0.0" },
-  "files": ["index.js", "src/"],
+  "files": ["index.js", "browser.js", "src/", "dist/"],
+  "scripts": { "build": "node browser.js" },
   "dependencies": {
     "@fitfak/pdf-html": "^1.0.0",
     "@fitfak/qr": "^1.0.0"

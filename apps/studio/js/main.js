@@ -9,6 +9,7 @@ import { api, toBase64, fromBase64, ApiError } from './lib/api.js';
 import { parsePfx, importSigningKey, signData, derToPem, BrowserPkcs12Error } from './signing/pkcs12.js';
 import { renderPanel } from './verify/panel.js';
 import { DocumentEditor } from './edit/document.js';
+import { SceneEditor } from './scene/editor.js';
 
 /* ------------------------------------------------------------------ */
 /* Durum                                                                */
@@ -27,7 +28,9 @@ const state = {
   chainPems: [],
   zoom: 1,
   verifyReport: null,
-  editor: null
+  editor: null,
+  sceneEditor: null,
+  activeTab: 'design'
 };
 
 const DEFAULT_HTML = `<article class="paper paper--kurumsal">
@@ -575,6 +578,7 @@ function renderConformance(panel, report) {
 /* ------------------------------------------------------------------ */
 
 function switchTab(name) {
+  state.activeTab = name;
   for (const tab of $$('.tab')) {
     const active = tab.dataset.tab === name;
     tab.classList.toggle('is-active', active);
@@ -583,6 +587,144 @@ function switchTab(name) {
   for (const pane of $$('.pane')) {
     pane.classList.toggle('is-hidden', pane.dataset.pane !== name);
   }
+
+  // Sahne editörü kendi tuvalini kullanır; iki tuval aynı anda görünmez.
+  const scene = name === 'scene';
+  $('#sceneShell').classList.toggle('is-hidden', !scene);
+  $('#canvasScroll').classList.toggle('is-hidden', scene);
+  $('.canvas__toolbar').classList.toggle('is-hidden', scene);
+
+  if (scene) ensureSceneEditor().catch((err) => handleError(err, 'Editör yüklenemedi'));
+}
+
+/**
+ * Sahne editörünü İLK kullanımda yükler.
+ *
+ * Model paketi 78 KB'tır; bu sekmeye hiç girmeyen kullanıcı onu indirmez.
+ */
+async function ensureSceneEditor() {
+  if (state.sceneEditor) return state.sceneEditor;
+
+  const editor = new SceneEditor({
+    canvasRoot: $('#sceneCanvas'),
+    inspectorRoot: $('#sceneInspector'),
+    toolbarRoot: $('#sceneToolbar'),
+    pagesRoot: $('#scenePages'),
+    api,
+    isActive: () => state.activeTab === 'scene',
+    onStatus: (message) => status(message)
+  });
+
+  await editor.init();
+  state.sceneEditor = editor;
+  bindSceneControls(editor);
+  return editor;
+}
+
+function bindSceneControls(editor) {
+  $('#btnSceneNew').addEventListener('click', () => {
+    editor.newDocument();
+    $('#btnSceneDownload').disabled = true;
+    $('#btnSceneToSign').disabled = true;
+  });
+
+  $('#btnSceneRender').addEventListener('click', async () => {
+    try {
+      status('Sahne derleniyor…');
+      const result = await editor.renderPdf();
+
+      // Üretilen belge imzalama ve doğrulama akışlarının da girdisidir
+      state.pdf = editor.lastPdf;
+      state.manifest = result.manifest;
+      state.verifyReport = null;
+      refreshSlotSelect();
+
+      $('#btnSceneDownload').disabled = false;
+      $('#btnSceneToSign').disabled = false;
+      $('#btnDownload').disabled = false;
+      $('#btnSign').disabled = !state.browserKey && !$('#serverSide').checked;
+
+      for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
+      const slots = result.manifest.signatureSlots.length;
+      toast(`PDF üretildi — ${result.manifest.pageCount} sayfa, ${slots} imza yuvası`, 'ok');
+      status('PDF hazır');
+    } catch (err) {
+      handleError(err, 'Sahne derlenemedi');
+    }
+  });
+
+  $('#btnSceneDownload').addEventListener('click', () => {
+    if (!editor.lastPdf) return;
+    downloadBytes(editor.lastPdf, 'application/pdf',
+      (editor.scene.doc.meta.title || 'belge') + '.pdf');
+  });
+
+  $('#btnSceneToSign').addEventListener('click', async () => {
+    switchTab('sign');
+    await refreshVerifyPanel();
+    toast('Belge imzalama akışına aktarıldı.', 'ok');
+  });
+
+  $('#btnSceneExport').addEventListener('click', () => {
+    const json = JSON.stringify(editor.scene.toJSON(), null, 2);
+    downloadBytes(new TextEncoder().encode(json), 'application/json',
+      (editor.scene.doc.meta.title || 'sahne') + '.json');
+  });
+
+  $('#sceneImportJson').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      editor.loadScene(JSON.parse(await file.text()));
+      toast('Sahne yüklendi.', 'ok');
+    } catch (err) {
+      handleError(err, 'Sahne dosyası okunamadı');
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  $('#sceneImportPdf').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      status('PDF içe aktarılıyor…');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await api.sceneImportPdf(bytes);
+      editor.loadScene(result.scene, result.assets || []);
+      for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
+      status('İçe aktarıldı');
+    } catch (err) {
+      handleError(err, 'PDF içe aktarılamadı');
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  $('#btnSceneFromHtml').addEventListener('click', async () => {
+    try {
+      status('HTML içe aktarılıyor…');
+      const result = await api.sceneImportHtml({
+        html: withSubstitutions($('#htmlSource').value),
+        theme: $('#themeSelect').value
+      });
+      editor.loadScene(result.scene, result.assets || []);
+      for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
+      status('İçe aktarıldı');
+    } catch (err) {
+      handleError(err, 'HTML içe aktarılamadı');
+    }
+  });
+}
+
+/** Baytları dosya olarak indirir. */
+function downloadBytes(bytes, mime, filename) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const a = el('a', { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function fmtDate(iso) {

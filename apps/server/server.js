@@ -29,6 +29,7 @@ const { verifyPdf } = require('@fitfak/verify');
 const p12 = require('@fitfak/pkcs12');
 const pdfDoc = require('@fitfak/pdf-doc');
 const conformance = require('@fitfak/conformance');
+const scene = require('@fitfak/pdf-scene');
 const policy = require('./src/policy');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -259,6 +260,124 @@ const routes = {
       warnings: result.warnings,
       conformance: result.conformance || null
     });
+  },
+
+  /**
+   * SAHNE → PDF.
+   *
+   * Görsel editörün çıktısı buradan geçer. Sahne düz JSON'dur; varlıkların
+   * baytları ayrı bir dizide base64 olarak gelir. Varlıkları sahnenin içine
+   * gömmek, tek bir görselin belgeyi on kat büyütmesi demekti.
+   */
+  'POST /api/scene/render': async (req, res) => {
+    const body = await readJson(req);
+    if (!body.scene || typeof body.scene !== 'object') {
+      return sendError(res, 400, 'ERR_SCENE_MISSING', 'scene alanı zorunlu');
+    }
+
+    const incoming = Array.isArray(body.assets) ? body.assets : [];
+    policy.checkCount(incoming.length, 'maxAssets', 'varlık');
+
+    const assets = new scene.AssetManager({
+      limits: {
+        maxBytes: policy.LIMITS.maxImageBytes,
+        maxAssets: policy.LIMITS.maxAssets,
+        maxPixels: policy.LIMITS.maxImagePixels
+      }
+    });
+
+    // Varlıkların kimliği İÇERİKTEN türer; istemcinin bildirdiği kimliğe
+    // güvenilmez. Uyuşmazsa sahnedeki gönderme kırılır ve doğrulayıcı bunu
+    // ERR_ASSET_MISSING olarak bildirir — sessizce yanlış görsel gömülmez.
+    const remap = new Map();
+    for (const a of incoming) {
+      const bytes = unb64(a.base64 || a.bytes);
+      if (!bytes.length) continue;
+      try {
+        const added = assets.add(bytes, { name: a.name });
+        if (a.id && a.id !== added.id) remap.set(a.id, added.id);
+      } catch (err) {
+        return sendError(res, err.code === 'ERR_ASSET_TOO_LARGE' ? 413 : 400,
+          err.code || 'ERR_ASSET', err.message);
+      }
+    }
+
+    // Sahnenin varlık listesi SUNUCUNUN hesabıyla değiştirilir. İstemcinin
+    // bildirdiği üst veriye (boyut, özet, ölçü) güvenmek, gerçekte olmayan
+    // bir görselin "var" sayılmasına ya da yanlış ölçüyle çizilmesine yol açar.
+    const doc = rewriteAssetIds(body.scene, remap);
+    doc.assets = assets.manifest();
+
+    let result;
+    try {
+      result = scene.compileToPdf(doc, {
+        assets,
+        fonts: sceneFonts(body.fonts),
+        compress: body.compress !== false
+      });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_SCENE',
+        err.message, err.issues ? err.issues.slice(0, 20) : undefined);
+    }
+
+    sendJson(res, 200, {
+      pdf: b64(result.pdf),
+      manifest: result.manifest,
+      warnings: result.warnings
+    });
+  },
+
+  /** PDF → SAHNE: var olan belgeyi düzenlenebilir hâle getirir. */
+  'POST /api/scene/import/pdf': async (req, res) => {
+    const body = await readJson(req);
+    const pdf = unb64(body.pdf);
+    if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+
+    try {
+      const { scene: imported, warnings } = scene.importFromPdf(pdf, {
+        password: body.password || '',
+        fonts: sceneFonts(body.fonts),
+        maxPages: policy.LIMITS.maxPages
+      });
+      sendJson(res, 200, { scene: imported.toJSON(), warnings });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
+    }
+  },
+
+  /** HTML → SAHNE: akış belgesini serbest yerleşime düzleştirir. */
+  'POST /api/scene/import/html': async (req, res) => {
+    const body = await readJson(req);
+    if (!body.html) return sendError(res, 400, 'ERR_HTML_MISSING', 'html alanı zorunlu');
+    policy.checkBytes(Buffer.from(String(body.html), 'utf8'), 'maxHtmlBytes', 'HTML');
+
+    const css = [];
+    if (body.theme !== null) css.push(...paper.stack(body.theme || 'kurumsal'));
+    if (body.css) css.push(...(Array.isArray(body.css) ? body.css : [body.css]));
+
+    try {
+      const { scene: imported, warnings } = scene.importFromHtml({
+        html: body.html, css,
+        fonts: sceneFonts(body.fonts),
+        page: body.page || { size: 'A4', margin: '20mm 18mm' },
+        baseDir: ROOT,
+        assetRoots: [CONFIG.assetRoot],
+        assetLimits: {
+          maxImageBytes: policy.LIMITS.maxImageBytes,
+          maxFontBytes: policy.LIMITS.maxFontBytes,
+          maxAssets: policy.LIMITS.maxAssets
+        }
+      });
+
+      // Varlık baytları da dönmeli: tarayıcıdaki editör onları gösterecek
+      const assetBytes = imported.assets.manifest().map((a) => ({
+        ...a, base64: b64(imported.assets.bytes(a.id))
+      }));
+      sendJson(res, 200, { scene: imported.toJSON(), assets: assetBytes, warnings });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
+    }
   },
 
   /** PDF yapısını incele (sayfa sayısı, imzalar) */
@@ -739,6 +858,46 @@ function applyOp(doc, op) {
 }
 
 /** İstek gövdesinden görünür imza yapılandırması kurar. */
+/**
+ * Sahne derleyicisi için font listesi.
+ *
+ * İstemci font DOSYA YOLU veremez: bu, belgeden gelen bir yolun dosya
+ * sistemine ulaşması demek olurdu (bkz. docs/08-guvenlik.md G-01). Yalnız
+ * sunucunun tanıdığı aileler seçilebilir.
+ */
+function sceneFonts(requested) {
+  const available = { Ubuntu: CONFIG.defaultFont };
+  const families = Array.isArray(requested) ? requested : null;
+  if (!families || !families.length) {
+    return [{ family: 'Ubuntu', src: available.Ubuntu }];
+  }
+  const out = [];
+  for (const f of families) {
+    const family = typeof f === 'string' ? f : (f && f.family);
+    if (available[family]) out.push({ family, src: available[family] });
+  }
+  return out.length ? out : [{ family: 'Ubuntu', src: available.Ubuntu }];
+}
+
+/**
+ * Sahnedeki varlık kimliklerini sunucunun hesapladıklarıyla değiştirir.
+ *
+ * Kimlik içerikten türer; istemci farklı bir kimlik bildirdiyse (eski
+ * sürüm, elle düzenlenmiş dosya, kötü niyet) gönderme yeniden bağlanır.
+ */
+function rewriteAssetIds(doc, remap) {
+  const walk = (node) => {
+    if (node.assetId && remap.has(node.assetId)) node.assetId = remap.get(node.assetId);
+    if (Array.isArray(node.children)) node.children.forEach(walk);
+  };
+  const copy = JSON.parse(JSON.stringify(doc));
+  for (const page of copy.pages || []) (page.nodes || []).forEach(walk);
+  if (Array.isArray(copy.assets)) {
+    copy.assets = copy.assets.map((a) => (remap.has(a.id) ? { ...a, id: remap.get(a.id) } : a));
+  }
+  return copy;
+}
+
 function buildVisibleForRequest(body) {
   if (body.visible === false) return null;
   const v = body.visible || {};
@@ -798,6 +957,9 @@ const MIME = {
 /** Yalnız bu uzantılar servis edilir — kaynak/manifest dosyaları sızmasın. */
 const SERVABLE = new Set(Object.keys(MIME));
 
+/** Sahne tarayıcı paketi — süreç ömrü boyunca bir kez üretilir. */
+let sceneBundleCache = null;
+
 function serveStatic(pathname, res) {
   // Yüzde kodlaması ÇÖZÜLDÜKTEN sonra kontrol edilir; aksi hâlde `%2e%2e`
   // ile dizin dışına çıkılabilir.
@@ -828,6 +990,23 @@ function serveStatic(pathname, res) {
   // motoru AYNI dosyayı okur, önizleme bu yüzden gerçekten WYSIWYG olur.
   let file = resolved;
   if (rel === '/vendor/paper.css') file = path.join(paper.DIST, 'paper.css');
+
+  // Sahne modelinin tarayıcı paketi ANINDA üretilir: editör ile sunucu
+  // kesinlikle aynı kaynaktan çalışır, "dist güncellenmemiş" diye bir
+  // ayrışma olamaz.
+  if (rel === '/vendor/scene.esm.js') {
+    if (!sceneBundleCache) {
+      sceneBundleCache = Buffer.from(
+        require('@fitfak/pdf-scene/browser').buildBrowserBundle(), 'utf8');
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME['.js'],
+      'Content-Length': sceneBundleCache.length,
+      'Cache-Control': 'no-cache',
+      ...SECURITY_HEADERS
+    });
+    return res.end(sceneBundleCache);
+  }
 
   fs.readFile(file, (err, data) => {
     if (err) {

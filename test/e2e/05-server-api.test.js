@@ -560,3 +560,163 @@ test('sağlık ucu hız sınırından ve kimlik doğrulamadan muaftır', async (
   assert.strictEqual(mod.policy.classify('POST /api/sign/pfx'), 'sensitive');
   assert.strictEqual(mod.policy.classify('POST /api/render'), 'compute');
 });
+
+/* ================================================================== */
+/* Sahne uçları                                                        */
+/* ================================================================== */
+
+/** Küçük ama geçerli bir PNG (varlık yükleme yolunu sınamak için). */
+function tinyPng(width, height) {
+  const zlib = require('zlib');
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32 ? zlib.crc32(body) : 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(Buffer.alloc((width * 3 + 1) * height))),
+    chunk('IEND', Buffer.alloc(0))
+  ]);
+}
+
+const sceneWith = (nodes) => ({
+  version: 1,
+  meta: { title: 'API sahnesi' },
+  page: { size: 'A4' },
+  assets: [],
+  pages: [{ id: 'pg1', name: 'Sayfa 1', nodes }]
+});
+
+test('POST /api/scene/render sahneyi PDF e derler', async () => {
+  const { status, body } = await call('/api/scene/render', {
+    scene: sceneWith([
+      { id: 'baslik', type: 'text', frame: { x: 60, y: 80, width: 400, height: 40 },
+        text: 'Sahne API', fontSize: 18 },
+      { id: 'yuva', type: 'signature', frame: { x: 60, y: 700, width: 200, height: 60 },
+        fieldName: 'Imza1', role: 'Düzenleyen' }
+    ]),
+    assets: []
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  const pdf = unb64(body.pdf);
+  assert.ok(pdf.subarray(0, 5).toString('latin1') === '%PDF-');
+  assert.strictEqual(body.manifest.pageCount, 1);
+  assert.strictEqual(body.manifest.signatureSlots.length, 1);
+  assert.strictEqual(body.manifest.signatureSlots[0].fieldName, 'Imza1');
+  assert.strictEqual(body.manifest.signatureSlots[0].origin, 'bottom-left');
+});
+
+test('POST /api/scene/render varlık kimliğini İÇERİKTEN yeniden hesaplar', async () => {
+  // İstemci uydurma bir kimlik bildiriyor; sunucu onu içerikten türetilenle
+  // değiştirmeli ve gönderme kırılmamalı.
+  const png = tinyPng(8, 4);
+  const { status, body } = await call('/api/scene/render', {
+    scene: {
+      ...sceneWith([
+        { id: 'im', type: 'image', frame: { x: 40, y: 40, width: 80, height: 40 },
+          assetId: 'ast_uydurma' }
+      ]),
+      assets: [{ id: 'ast_uydurma', kind: 'image', mime: 'image/png',
+                 sha256: 'f'.repeat(64), size: 1, width: 1, height: 1 }]
+    },
+    assets: [{ id: 'ast_uydurma', name: 'x.png', base64: b64(png) }]
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  assert.deepStrictEqual(body.warnings, [], 'görsel bulunmalıydı');
+  assert.ok(unb64(body.pdf).includes(Buffer.from('/Subtype /Image')) ||
+            unb64(body.pdf).includes(Buffer.from('/Image')),
+    'görsel gerçekten gömülmeli');
+});
+
+test('POST /api/scene/render geçersiz sahneyi sorun listesiyle reddeder', async () => {
+  const { status, body } = await call('/api/scene/render', {
+    scene: sceneWith([
+      { id: 'x', type: 'iframe', frame: { x: 0, y: 0, width: 1, height: 1 } }
+    ]),
+    assets: []
+  });
+
+  assert.strictEqual(status, 400);
+  assert.strictEqual(body.error.code, 'ERR_SCENE_INVALID');
+  assert.ok(Array.isArray(body.error.details) && body.error.details.length);
+  assert.ok(body.error.details.some((d) => d.code === 'ERR_NODE_TYPE'));
+});
+
+test('POST /api/scene/render sahne alanı eksikse 400 döner', async () => {
+  const { status, body } = await call('/api/scene/render', { assets: [] });
+  assert.strictEqual(status, 400);
+  assert.strictEqual(body.error.code, 'ERR_SCENE_MISSING');
+});
+
+test('POST /api/scene/render font DOSYA YOLU kabul etmez', async () => {
+  // İstemcinin verdiği yol dosya sistemine ulaşmamalı; sunucu yalnız
+  // tanıdığı aileleri kullanır ve bilinmeyeni sessizce varsayılana düşürür.
+  const { status, body } = await call('/api/scene/render', {
+    scene: sceneWith([
+      { id: 't', type: 'text', frame: { x: 10, y: 10, width: 200, height: 30 }, text: 'yol testi' }
+    ]),
+    assets: [],
+    fonts: [{ family: 'Ubuntu', src: '/etc/passwd' }, '../../etc/shadow']
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  const pdf = unb64(body.pdf);
+  assert.ok(!pdf.includes(Buffer.from('root:x:')), 'sistem dosyası gömülmemeli');
+});
+
+test('POST /api/scene/import/html HTML i sahneye çevirir', async () => {
+  const { status, body } = await call('/api/scene/import/html', {
+    html: '<article class="paper"><h1>İçe aktarım</h1><p>gövde metni</p></article>',
+    theme: 'kurumsal'
+  });
+
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+  assert.ok(body.scene.pages[0].nodes.length > 0);
+  assert.ok(body.scene.pages[0].nodes.some(
+    (n) => n.type === 'text' && /İçe aktarım/.test(n.text)));
+  assert.ok(body.warnings.some((w) => w.code === 'WARN_IMPORT_FLATTENED'),
+    'düzleştirme sınırı bildirilmeli');
+});
+
+test('POST /api/scene/import/pdf PDF i sahneye çevirir', async () => {
+  const rendered = await call('/api/scene/render', {
+    scene: sceneWith([
+      { id: 't', type: 'text', frame: { x: 72, y: 144, width: 300, height: 30 },
+        text: 'Geri dönüş', fontSize: 13 }
+    ]),
+    assets: []
+  });
+  assert.strictEqual(rendered.status, 200);
+
+  const { status, body } = await call('/api/scene/import/pdf', { pdf: rendered.body.pdf });
+  assert.strictEqual(status, 200, JSON.stringify(body.error));
+
+  const node = body.scene.pages[0].nodes[0];
+  assert.strictEqual(node.type, 'text');
+  assert.strictEqual(node.text, 'Geri dönüş');
+  assert.strictEqual(node.frame.x, 72);
+  assert.strictEqual(node.frame.y, 144, 'gerçek font yükseltisiyle tur kapanmalı');
+  assert.ok(body.warnings.some((w) => w.code === 'WARN_IMPORT_TEXT_ONLY'));
+});
+
+test('GET /vendor/scene.esm.js tarayıcı paketini servis eder', async () => {
+  const res = await fetch(base + '/vendor/scene.esm.js');
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type'), /javascript/);
+
+  const source = await res.text();
+  assert.match(source, /export const Scene/);
+  assert.match(source, /export const geometry/);
+  assert.ok(source.length > 20000, 'paket gerçekten dolu olmalı');
+});
