@@ -165,6 +165,17 @@ function render(o = {}) {
   const flow = new FlowLayout(engine);
   const { pages } = flow.run(boxTree);
 
+  /* 6b. Yalnız yerleşim -------------------------------------------
+   * İçe aktarıcılar (HTML → sahne) yerleşimin SONUCUNU ister, PDF'i değil.
+   * Aynı hesabı ikinci bir yerde tekrarlamak, iki yerleşimin zamanla
+   * ayrışması demektir. */
+  if (o.layoutOnly) {
+    return {
+      pages, page, fonts, engine, flow, warnings,
+      metadata: { title: docTitle, ...(o.metadata || {}) }
+    };
+  }
+
   /* 7. Uyumluluk profili ------------------------------------------ */
   const conformance = resolveConformance(o.conformance, warnings, o.metadata || {});
 
