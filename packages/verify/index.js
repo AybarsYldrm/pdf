@@ -591,18 +591,53 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
     let found = null;
 
     // 1. DSS'teki CRL'ler (çevrimdışı LTV kanıtı)
+    //
+    // Reddedilen CRL'ler SESSİZCE geçilmez: kapsam dışı, süresi geçmiş ya
+    // da imzası tutmayan bir liste "kanıt yok" demektir ve gerekçesiyle
+    // birlikte raporlanır. Aksi hâlde kullanıcı, DSS'te CRL gördüğü için
+    // belgenin doğrulanmış olduğunu sanır.
+    const crlRejections = [];
+    let partialCrl = null;
     if (ctx.useEmbedded && ctx.dss) {
       for (const crlDer of ctx.dss.crls) {
         try {
-          const res = checkCrl(cert, issuer, crlDer, { validationTime: checkTime, toleranceMs: 365 * 86400000 });
-          found = {
+          const res = checkCrl(cert, issuer, crlDer, {
+            validationTime: checkTime,
+            toleranceMs: 365 * 86400000,
+            // DSS'e gömülü CRL, sertifikanın CDP adresinden başka bir
+            // yerden gelmiş olabilir; kapsamın SINIFI (CA/EE, sebepler)
+            // yine de denetlenir.
+            checkDistributionPoint: false
+          });
+
+          const entry = {
             subject: info.cn, source: 'dss-crl', status: res.status,
             reason: res.reason || null,
             thisUpdate: res.thisUpdate ? res.thisUpdate.toISOString() : null,
-            nextUpdate: res.nextUpdate ? res.nextUpdate.toISOString() : null
+            nextUpdate: res.nextUpdate ? res.nextUpdate.toISOString() : null,
+            crlNumber: res.crlNumber || null
           };
+
+          // Bölümlenmiş bir CRL'den gelen "good" TAM cevap değildir:
+          // yalnız o listenin kapsadığı sebepler için geçerlidir. Yine de
+          // KENARA yazılır — listede daha sonra tam bir CRL çıkarsa o
+          // kazanmalı; çıkmazsa bu, "hiç bilgi yok"tan iyi bir gerekçedir.
+          if (res.scope && !res.scope.complete && res.status === 'good') {
+            entry.status = 'unknown';
+            entry.partial = true;
+            entry.coveredReasons = res.scope.coveredReasons;
+            entry.error = 'CRL yalnız bazı iptal sebeplerini kapsıyor; ' +
+              'tam iptal kanıtı sayılmaz';
+            crlRejections.push(entry.error);
+            partialCrl = partialCrl || entry;
+            continue;
+          }
+
+          found = entry;
           if (res.status === 'revoked') break;
-        } catch { /* bu CRL bu sertifikaya ait değil */ }
+        } catch (err) {
+          crlRejections.push(`${err.code || 'ERR_CRL'}: ${err.message}`);
+        }
       }
     }
 
@@ -641,6 +676,17 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
       } catch (err) {
         found = { subject: info.cn, source: 'network', status: 'unknown', error: err.message };
       }
+    }
+
+    // Hiçbir kaynaktan kanıt çıkmadıysa ama REDDEDİLEN kanıtlar varsa,
+    // gerekçe raporlanır. "Kanıt yok" ile "kanıt vardı ama geçersizdi"
+    // farklı şeylerdir ve kullanıcının ikincisini bilmesi gerekir.
+    if (!found && partialCrl) found = partialCrl;
+    if (!found && crlRejections.length) {
+      found = {
+        subject: info.cn, source: 'dss-crl', status: 'unknown',
+        error: crlRejections[crlRejections.length - 1]
+      };
     }
 
     results.push(found || { subject: info.cn, source: 'none', status: 'unknown' });
