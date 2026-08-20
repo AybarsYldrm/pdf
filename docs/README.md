@@ -17,8 +17,8 @@ hedefine giden yolun analiz, mimari ve yol haritası belgelerini içerir.
 | 05 | [Web Studio](./05-web-studio.md) | Vanilla JS arayüz: PDF görüntüleyici, editör, imza yerleştirme, PFX, imza paneli. |
 | 06 | [Yol Haritası](./06-yol-haritasi.md) | Fazlar, milestone'lar, kabul kriterleri, test stratejisi, risk kaydı. |
 | 07 | [CLI](./07-cli.md) | `fitfak-belge` komut satırı aracı: üret, imzala, doğrula, denetle. |
-| 08 | [Güvenlik](./08-guvenlik.md) | Güven sınırları, denetim bulguları (G-01…G-12), düzeltmeler, regresyon testleri, kabul edilmiş sınırlar. |
-| 09 | [Sahne Modeli](./09-sahne-modeli.md) | Serbest yerleşimli belge şeması, geometri, varlık sistemi, görsel editör, Scene→PDF/HTML derleyicileri. |
+| 08 | [Güvenlik](./08-guvenlik.md) | Güven sınırları, denetim bulguları (G-01…G-17), düzeltmeler, regresyon testleri, kabul edilmiş sınırlar. |
+| 09 | [Sahne Modeli](./09-sahne-modeli.md) | Serbest yerleşimli belge şeması, geometri, varlık sistemi, görsel editör, Scene→PDF/HTML derleyicileri, PDF/UA, ortak düzenleme. |
 
 ## Tek Cümlelik Hedef
 

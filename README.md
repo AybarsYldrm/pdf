@@ -50,7 +50,8 @@ packages/
 ├── pdf-scene/  @fitfak/pdf-scene  serbest yerleşimli sahne modeli + görsel editör çekirdeği
 ├── paper/      @fitfak/paper      baskıya öncelikli CSS tasarım sistemi
 ├── verify/     @fitfak/verify     imza doğrulama + ETSI raporu
-└── conformance/ @fitfak/conformance  PDF/A + PDF/UA denetimi
+├── conformance/ @fitfak/conformance PDF/A + PDF/UA denetimi
+└── registry/   @fitfak/registry   eklemeli, HMAC zincirli doğrulama kaydı
 
 apps/
 ├── server/     node:http API sunucusu
@@ -203,19 +204,23 @@ sertifikalara **gerçek AIA/CDP uzantıları** gömülür — böylece otomatik 
 kodu da gerçekten sınanır.
 
 ```bash
-npm test                    # 192 birim testi
-npm run test:e2e            # 79 uçtan uca test
-npm run test:all            # ikisi birden (271)
+npm test                    # birim testleri
+npm run test:e2e            # uçtan uca testler
+npm run test:all            # ikisi birden (687)
 npm run fixtures            # PFX ve PDF test dosyalarını üretir
 npm run conformance:report  # docs/conformance/RAPOR.md
 ```
 
-Kapsam: PAdES seviyeleri · yalnız-CRL veren CA · çoklu imza · iptal · seviye
-düşüşü raporlama · artımlı güncelleme bütünlüğü · 6 PFX şeması · RFC 2268 RC2
-vektörleri · damga geriye uyumu (piksel-piksel) · HTML/CSS motoru · xref
-akışı / nesne akışı / şifreli PDF okuma · form doldurma ve düzleştirme · metin
-çıkarımı · PDF/A ve PDF/UA denetimi · doğrulama (kurcalama, POE, güvenilmeyen
-kök) · sunucu API'si · iki fazlı imzalama · CLI.
+Kapsam: PAdES seviyeleri · yalnız-CRL veren CA · RFC 5280 CRL kapsamı ve delta
+· çoklu imza · iptal · seviye düşüşü raporlama · artımlı güncelleme bütünlüğü ·
+6 PFX şeması · RFC 2268 RC2 vektörleri · damga geriye uyumu (piksel-piksel) ·
+HTML/CSS motoru · xref akışı / nesne akışı / şifreli PDF okuma · form doldurma
+ve düzleştirme · metin çıkarımı · sahne modeli, vektör/görsel içe aktarma,
+paragraf gruplama · PDF/A ve PDF/UA denetimi (sahne yolunda da) · sıkıştırma
+bombası ve SSRF savunmaları · hız sınırının süreçler arası paylaşımı · doğrulama
+kaydının kurcalanma tespiti · ortak düzenleme (iki istemci, çakışma) ·
+doğrulama (kurcalama, POE, güvenilmeyen kök) · sunucu API'si · iki fazlı
+imzalama · CLI.
 
 ---
 
@@ -255,6 +260,18 @@ Uyumluluk raporu: [docs/conformance/RAPOR.md](docs/conformance/RAPOR.md)
   içindedir. PDF önizlemesi ayrı bir çerçevede yaşar; böylece HTML çerçevesinin
   `sandbox` niteliği hiçbir akışta kaldırılmaz.
 - CSP, `nosniff`, `frame-ancestors 'none'`, yol kaçışı koruması.
+- Görsel başlığı **çözmeden önce** okunur: 40 KB'lık bir PNG'nin 1,6 GB'a
+  açılması engellenir.
+- Uzak varlıklar **varsayılan olarak kapalı**; açılırsa ad bir kez çözülür ve
+  bağlantı doğrulanmış IP'ye kurulur (özel ağlar, IPv4-eşlemeli IPv6, 6to4 ve
+  NAT64 reddedilir).
+- Hız sınırı sayaçları `RATE_LIMIT_DIR` ile süreçler arasında paylaşılır;
+  paylaşılmıyorsa `/api/health` bunu **söyler**.
+- İmzalanan belgeler eklemeli, HMAC zincirli bir **doğrulama kaydına** yazılır;
+  defter kurcalanırsa hiçbir kayıt kanıt sayılmaz.
+
+Ayrıntılı denetim ve **kabul edilmiş sınırlar**:
+[docs/08-guvenlik.md](docs/08-guvenlik.md).
 - Doğrulanamayan bir iptal kanıtı **asla** DSS'e gömülmez.
 
 ## Lisans
