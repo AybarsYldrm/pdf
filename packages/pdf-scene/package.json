@@ -1,0 +1,40 @@
+{
+  "name": "@fitfak/pdf-scene",
+  "version": "1.0.0",
+  "description": "Sahne modeli — serbest yerleşimli belge şeması, geometri ve varlık yönetimi. Editör ile PDF motoru arasındaki tek gerçek kaynak.",
+  "main": "index.js",
+  "author": {
+    "email": "network@fitfak.net",
+    "name": "Aybars Yıldırım",
+    "url": "https://aybars.net.tr"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "index.js",
+    "browser.js",
+    "src/",
+    "dist/"
+  ],
+  "scripts": {
+    "build": "node browser.js"
+  },
+  "dependencies": {
+    "@fitfak/pdf-html": "^1.0.0",
+    "@fitfak/qr": "^1.0.0",
+    "@fitfak/conformance": "^1.0.0",
+    "@fitfak/pdf": "^1.0.0"
+  },
+  "keywords": [
+    "pdf",
+    "scene",
+    "editor",
+    "layout",
+    "wysiwyg"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

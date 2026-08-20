@@ -47,9 +47,11 @@ fitfak-belge/
 │   ├── pkcs12/       @fitfak/pkcs12     [YENİ]    tam PFX parse/build
 │   ├── pdf-doc/      @fitfak/pdf-doc    [YENİ]    PDF okuma + incremental düzenleme
 │   ├── pdf-html/     @fitfak/pdf-html   [YENİ]    HTML/CSS → PDF derleyici
+│   ├── pdf-scene/    @fitfak/pdf-scene  [YENİ]    serbest yerleşimli sahne modeli
 │   ├── paper/        @fitfak/paper      [YENİ]    baskıya-öncelikli CSS tasarım sistemi
 │   ├── stamp/        @fitfak/stamp      [YENİ]    damga şablon motoru (pades'ten ayrılır)
-│   └── verify/       @fitfak/verify     [YENİ]    imza doğrulama + ETSI raporu
+│   ├── verify/       @fitfak/verify     [YENİ]    imza doğrulama + ETSI raporu
+│   └── registry/     @fitfak/registry   [YENİ]    eklemeli doğrulama kaydı
 │
 ├── apps/
 │   ├── studio/                          [YENİ]    vanilla JS web arayüzü
@@ -82,6 +84,7 @@ Bağımlılık **yalnızca aşağı doğru** akar. Yukarı ok yoktur; döngü yo
 ├──────────────────────────────────────────────────────────────┤
 │  L2  BELGE           @fitfak/pdf-html  @fitfak/paper          │
 │                      @fitfak/pdf-doc   @fitfak/stamp          │
+│                      @fitfak/pdf-scene                        │
 ├──────────────────────────────────────────────────────────────┤
 │  L1  BİÇİM           @fitfak/pdf   @fitfak/qr                 │
 ├──────────────────────────────────────────────────────────────┤
@@ -100,9 +103,11 @@ Bağımlılık **yalnızca aşağı doğru** akar. Yukarı ok yoktur; döngü yo
 | `stamp` | `pdf`, `qr` |
 | `pdf-doc` | `pdf` |
 | `pdf-html` | `pdf`, `paper` |
+| `pdf-scene` | `pdf`, `pdf-html`, `qr`, `conformance` |
 | `paper` | (yok — saf CSS + şema) |
 | `pades` | `ssl`, `pdf-doc`, `stamp` |
 | `verify` | `ssl`, `pdf-doc` |
+| `registry` | (yok) |
 
 ---
 

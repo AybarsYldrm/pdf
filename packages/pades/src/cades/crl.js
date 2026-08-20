@@ -30,6 +30,23 @@ const SIG_ALG_TO_HASH = {
   '1.2.840.10045.4.3.4':   { hash: 'sha512', type: 'ec' }
 };
 
+/**
+ * İŞLEYEBİLDİĞİMİZ CRL uzantıları.
+ *
+ * Listede olmayan bir KRİTİK uzantı, CRL'i anlamadığımız anlamına gelir ve
+ * CRL reddedilir (RFC 5280 §6.3.3). Bu liste büyüdükçe daha çok CRL
+ * kullanılabilir olur; kısa kalması güvenli taraftır.
+ */
+const KNOWN_CRL_EXTENSIONS = new Set([
+  '2.5.29.20',   // cRLNumber
+  '2.5.29.27',   // deltaCRLIndicator
+  '2.5.29.28',   // issuingDistributionPoint
+  '2.5.29.35',   // authorityKeyIdentifier
+  '2.5.29.46',   // freshestCRL
+  '2.5.29.55',   // expiredCertsOnCRL
+  '1.3.6.1.5.5.7.1.1' // authorityInfoAccess
+]);
+
 const CRL_REASONS = [
   'unspecified', 'keyCompromise', 'cACompromise', 'affiliationChanged',
   'superseded', 'cessationOfOperation', 'certificateHold', 'unknown',
@@ -181,6 +198,10 @@ function parseCrl(crlDer) {
   let revoked = new Map();
   let crlNumber = null;
   let deltaIndicator = null;
+  let baseCrlNumber = null;
+  let idp = null;
+  let freshestCrl = [];
+  const extensions = [];
 
   if (p < tbs.end) {
     const maybeNext = readTLV(crlDer, p);
@@ -197,6 +218,7 @@ function parseCrl(crlDer) {
     if (node.tag === 0x30) {
       // revokedCertificates
       let q = node.start;
+      let lastEntryIssuer = null;
       while (q < node.end) {
         const entry = readTLV(crlDer, q);
         if (entry.next <= q) break;
@@ -209,6 +231,13 @@ function parseCrl(crlDer) {
         r = dateTlv.next;
 
         let reason = 0;
+        let invalidityDate = null;
+        // DOLAYLI (indirect) CRL'lerde girdiler farklı ihraç edenlere ait
+        // olabilir. `certificateIssuer` bir kez görüldükten sonra, aksi
+        // belirtilene kadar SONRAKİ girdiler için de geçerlidir
+        // (RFC 5280 §5.3.3) — bu yüzden döngü dışında taşınır.
+        let entryIssuer = lastEntryIssuer;
+
         if (r < entry.end) {
           const extsSeq = readTLV(crlDer, r);
           if (extsSeq.tag === 0x30) {
@@ -218,20 +247,34 @@ function parseCrl(crlDer) {
               if (ex.next <= s) break;
               const oTlv = readTLV(crlDer, ex.start);
               const oid = oidFromBytes(crlDer.slice(oTlv.start, oTlv.end));
-              if (oid === '2.5.29.21') { // reasonCode
-                let z = oTlv.next;
-                let mb = readTLV(crlDer, z);
-                if (mb.tag === 0x01) { z = mb.next; mb = readTLV(crlDer, z); }
-                if (mb.tag === 0x04) {
-                  const en = readTLV(crlDer, mb.start);
-                  if (en.tag === 0x0A) reason = crlDer[en.start];
+              let z = oTlv.next;
+              let mb = readTLV(crlDer, z);
+              if (mb.tag === 0x01) { z = mb.next; mb = readTLV(crlDer, z); }
+
+              if (mb.tag === 0x04) {
+                const val = crlDer.slice(mb.start, mb.end);
+                if (oid === '2.5.29.21') {                  // reasonCode
+                  const en = readTLV(val, 0);
+                  if (en.tag === 0x0A) reason = val[en.start];
+                } else if (oid === '2.5.29.24') {           // invalidityDate
+                  try {
+                    const d = readTLV(val, 0);
+                    invalidityDate = parseAsn1Time(val.slice(d.start, d.end), d.tag);
+                  } catch { /* okunamadı */ }
+                } else if (oid === '2.5.29.29') {           // certificateIssuer
+                  const names = collectDirectoryNames(val);
+                  if (names.length) { entryIssuer = names[0]; lastEntryIssuer = entryIssuer; }
                 }
               }
               s = ex.next;
             }
           }
         }
-        revoked.set(serialHex, { reason, reasonName: CRL_REASONS[reason] || 'unknown', revocationDate });
+        revoked.set(serialHex, {
+          reason, reasonName: CRL_REASONS[reason] || 'unknown',
+          revocationDate, invalidityDate,
+          certificateIssuer: entryIssuer
+        });
         q = entry.next;
       }
     } else if (node.tag === 0xA0) {
@@ -246,16 +289,21 @@ function parseCrl(crlDer) {
           const oid = oidFromBytes(crlDer.slice(oTlv.start, oTlv.end));
           let z = oTlv.next;
           let mb = readTLV(crlDer, z);
-          if (mb.tag === 0x01) { z = mb.next; mb = readTLV(crlDer, z); }
+          let critical = false;
+          if (mb.tag === 0x01) { critical = crlDer[mb.start] !== 0; z = mb.next; mb = readTLV(crlDer, z); }
           if (mb.tag === 0x04) {
             const val = crlDer.slice(mb.start, mb.end);
-            if (oid === '2.5.29.20') { // cRLNumber
-              try {
-                const i = readTLV(val, 0);
-                crlNumber = val.slice(i.start, i.end).toString('hex');
-              } catch { /* yoksay */ }
-            } else if (oid === '2.5.29.27') { // deltaCRLIndicator
+            extensions.push({ oid, critical });
+
+            if (oid === '2.5.29.20') {                    // cRLNumber
+              crlNumber = readIntegerHex(val);
+            } else if (oid === '2.5.29.27') {             // deltaCRLIndicator
               deltaIndicator = true;
+              baseCrlNumber = readIntegerHex(val);
+            } else if (oid === '2.5.29.28') {             // issuingDistributionPoint
+              idp = parseIdp(val);
+            } else if (oid === '2.5.29.46') {             // freshestCRL
+              freshestCrl = parseDistributionPointUris(val);
             }
           }
           s = ex.next;
@@ -265,11 +313,165 @@ function parseCrl(crlDer) {
     p = node.next;
   }
 
+  /**
+   * TANIMADIĞIMIZ KRİTİK UZANTI = CRL'i anlamıyoruz demektir.
+   *
+   * RFC 5280 §6.3.3: kritik bir uzantıyı işleyemiyorsak CRL kullanılamaz.
+   * "Anlamadım ama devam edeyim" demek, kapsamı daraltan bir uzantıyı
+   * görmezden gelip iptal edilmiş bir sertifikaya "temiz" demek olabilir.
+   */
+  const unknownCritical = extensions
+    .filter((e) => e.critical && !KNOWN_CRL_EXTENSIONS.has(e.oid))
+    .map((e) => e.oid);
+
   return {
     version, issuerDer, thisUpdate, nextUpdate, revoked,
-    crlNumber, isDelta: !!deltaIndicator,
+    crlNumber, isDelta: !!deltaIndicator, baseCrlNumber,
+    idp, freshestCrl, extensions, unknownCritical,
     sigAlgOid, signature, tbsDer, der: crlDer
   };
+}
+
+/** INTEGER değerini onaltılık dizgeye çevirir (başındaki sıfırlar atılır). */
+function readIntegerHex(val) {
+  try {
+    const i = readTLV(val, 0);
+    return val.slice(i.start, i.end).toString('hex').replace(/^0+(?=.)/, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * IssuingDistributionPoint (RFC 5280 §5.2.5).
+ *
+ *   IssuingDistributionPoint ::= SEQUENCE {
+ *     distributionPoint          [0] DistributionPointName OPTIONAL,
+ *     onlyContainsUserCerts      [1] BOOLEAN DEFAULT FALSE,
+ *     onlyContainsCACerts        [2] BOOLEAN DEFAULT FALSE,
+ *     onlySomeReasons            [3] ReasonFlags OPTIONAL,
+ *     indirectCRL                [4] BOOLEAN DEFAULT FALSE,
+ *     onlyContainsAttributeCerts [5] BOOLEAN DEFAULT FALSE }
+ *
+ * Bu uzantı CRL'in KAPSAMINI daraltır ve KRİTİKTİR. Görmezden gelmek,
+ * "yalnız CA sertifikalarını içeren" bir listeye bakıp bir son kullanıcı
+ * sertifikasına "iptal edilmemiş" demek olurdu.
+ */
+function parseIdp(val) {
+  const out = {
+    uris: [],
+    onlyUserCerts: false,
+    onlyCaCerts: false,
+    onlyAttributeCerts: false,
+    onlySomeReasons: null,
+    indirect: false
+  };
+
+  let seq;
+  try { seq = readTLV(val, 0); } catch { return out; }
+  if (seq.tag !== 0x30) return out;
+
+  let p = seq.start;
+  while (p < seq.end) {
+    const node = readTLV(val, p);
+    if (node.next <= p) break;
+    const tagNo = node.tag & 0x1f;
+    const body = val.slice(node.start, node.end);
+
+    switch (tagNo) {
+      case 0: out.uris = collectGeneralNameUris(body); break;
+      case 1: out.onlyUserCerts = body.length > 0 && body[0] !== 0; break;
+      case 2: out.onlyCaCerts = body.length > 0 && body[0] !== 0; break;
+      case 3: out.onlySomeReasons = decodeReasonFlags(body); break;
+      case 4: out.indirect = body.length > 0 && body[0] !== 0; break;
+      case 5: out.onlyAttributeCerts = body.length > 0 && body[0] !== 0; break;
+      default: break;
+    }
+    p = node.next;
+  }
+  return out;
+}
+
+/** ReasonFlags BIT STRING → sebep adları. */
+function decodeReasonFlags(body) {
+  if (!body.length) return [];
+  const unused = body[0];
+  const bits = body.slice(1);
+  const names = [
+    'unused', 'keyCompromise', 'cACompromise', 'affiliationChanged',
+    'superseded', 'cessationOfOperation', 'certificateHold',
+    'privilegeWithdrawn', 'aACompromise'
+  ];
+  const out = [];
+  const total = bits.length * 8 - unused;
+  for (let i = 0; i < total && i < names.length; i++) {
+    if (bits[i >> 3] & (0x80 >> (i & 7))) out.push(names[i]);
+  }
+  return out;
+}
+
+/** İç içe GeneralNames yapısından URI'leri (tag [6]) toplar. */
+function collectGeneralNameUris(body, depth = 0) {
+  const out = [];
+  if (depth > 4) return out;
+  let p = 0;
+  while (p < body.length) {
+    let node;
+    try { node = readTLV(body, p); } catch { break; }
+    if (node.next <= p) break;
+    const tagNo = node.tag & 0x1f;
+    const constructed = (node.tag & 0x20) !== 0;
+
+    if (!constructed && tagNo === 6) {
+      out.push(body.slice(node.start, node.end).toString('latin1'));
+    } else if (constructed) {
+      out.push(...collectGeneralNameUris(body.slice(node.start, node.end), depth + 1));
+    }
+    p = node.next;
+  }
+  return out;
+}
+
+/**
+ * GeneralNames içindeki directoryName ([4]) girdilerinin ham DER'i.
+ *
+ * Dolaylı CRL girdilerinde "bu seri kimin?" sorusunun cevabı budur ve
+ * BAYT olarak karşılaştırılır; ada dizge olarak bakmak kodlama
+ * farklılıklarında yanlış eşleşme üretir.
+ */
+function collectDirectoryNames(val, depth = 0) {
+  const out = [];
+  if (depth > 4) return out;
+  let p = 0;
+  while (p < val.length) {
+    let node;
+    try { node = readTLV(val, p); } catch { break; }
+    if (node.next <= p) break;
+    const tagNo = node.tag & 0x1f;
+    const constructed = (node.tag & 0x20) !== 0;
+
+    if (constructed && tagNo === 4) {
+      // [4] EXPLICIT Name — içindeki RDNSequence
+      try {
+        const inner = readTLV(val, node.start);
+        out.push(val.slice(inner.start - inner.hdr, inner.end));
+      } catch { /* bozuk */ }
+    } else if (constructed && node.tag === 0x30) {
+      out.push(...collectDirectoryNames(val.slice(node.start, node.end), depth + 1));
+    }
+    p = node.next;
+  }
+  return out;
+}
+
+/** freshestCRL / cRLDistributionPoints içindeki URI'ler. */
+function parseDistributionPointUris(val) {
+  try {
+    const seq = readTLV(val, 0);
+    return collectGeneralNameUris(val.slice(seq.start, seq.end));
+  } catch {
+    return [];
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -316,14 +518,24 @@ function checkCrl(certPemOrDer, issuerPemOrDer, crlDer, opts = {}) {
 
   const crl = parseCrl(crlDer);
 
-  if (crl.isDelta) {
+  if (crl.isDelta && !opts.allowDelta) {
     throw new CrlError('ERR_CRL_DELTA_UNSUPPORTED',
-      'Delta CRL doğrudan kullanılamaz; tam CRL gereklidir');
+      'Delta CRL tek başına kullanılamaz; taban CRL ile birlikte ' +
+      'checkCrlWithDelta() kullanın');
   }
 
-  // 1. Issuer adı, sertifikanın issuer'ı ile eşleşmeli
+  // 0. Anlamadığımız kritik uzantı varsa CRL'i KULLANAMAYIZ (RFC 5280 §6.3.3)
+  if (crl.unknownCritical.length) {
+    throw new CrlError('ERR_CRL_UNKNOWN_CRITICAL_EXTENSION',
+      `CRL tanınmayan kritik uzantı taşıyor: ${crl.unknownCritical.join(', ')}`);
+  }
+
+  // 1. Issuer adı eşleşmeli.
+  //    DOLAYLI CRL'de liste başka bir otorite tarafından yayımlanır; o
+  //    durumda ad eşleşmesi girdi düzeyinde (certificateIssuer) yapılır.
   const certIssuer = getIssuerDer(certDer);
-  if (!certIssuer.equals(crl.issuerDer)) {
+  const indirect = !!(crl.idp && crl.idp.indirect);
+  if (!indirect && !certIssuer.equals(crl.issuerDer)) {
     throw new CrlError('ERR_CRL_ISSUER_MISMATCH',
       'CRL issuer adı sertifikanın issuer adıyla eşleşmiyor');
   }
@@ -331,7 +543,7 @@ function checkCrl(certPemOrDer, issuerPemOrDer, crlDer, opts = {}) {
   // 2. AKI/SKI tutarlılığı (varsa)
   const aki = extractAKI(certDer);
   const ski = extractSKI(issuerDer);
-  if (aki.keyId && ski && !aki.keyId.equals(ski)) {
+  if (!indirect && aki.keyId && ski && !aki.keyId.equals(ski)) {
     throw new CrlError('ERR_CRL_ISSUER_KEY_MISMATCH',
       'CRL issuer sertifikası, sertifikanın AKI değeriyle uyuşmuyor');
   }
@@ -355,21 +567,149 @@ function checkCrl(certPemOrDer, issuerPemOrDer, crlDer, opts = {}) {
     throw new CrlError('ERR_CRL_NO_NEXT_UPDATE', 'CRL nextUpdate alanı taşımıyor');
   }
 
-  // 5. Seri numarası araması
-  const serialHex = getSerial(certDer).toString('hex').replace(/^0+/, '') || '0';
+  // 5. KAPSAM: bu CRL bu sertifika hakkında konuşuyor mu? (RFC 5280 §5.2.5)
+  const scope = checkScope(crl, certDer, opts);
+  if (!scope.covers) {
+    throw new CrlError('ERR_CRL_OUT_OF_SCOPE', scope.reason);
+  }
+
+  // 6. Seri numarası araması
+  const serialHex = getSerial(certDer).toString('hex').replace(/^0+(?=.)/, '') || '0';
   const hit = crl.revoked.get(serialHex);
 
   const base = {
     thisUpdate: crl.thisUpdate,
     nextUpdate: crl.nextUpdate,
     crlNumber: crl.crlNumber,
+    scope: {
+      partialReasons: scope.partialReasons,
+      coveredReasons: crl.idp && crl.idp.onlySomeReasons ? crl.idp.onlySomeReasons : null,
+      indirect,
+      complete: !scope.partialReasons
+    },
     der: crl.der
   };
 
-  if (hit && hit.reason !== 8 /* removeFromCRL */) {
-    return { status: 'revoked', reason: hit.reasonName, revocationDate: hit.revocationDate, ...base };
+  if (hit) {
+    // Dolaylı CRL'de girdi başka bir ihraç edene aitse bizim sertifikamız değildir
+    if (indirect && hit.certificateIssuer && !hit.certificateIssuer.equals(certIssuer)) {
+      return { status: 'good', ...base };
+    }
+    // `removeFromCRL` yalnız DELTA CRL'de anlamlıdır: tam listede bir
+    // girdinin "kaldırıldı" demesi çelişkidir ve yok sayılmamalıdır.
+    if (hit.reason === 8 && crl.isDelta) {
+      return { status: 'good', removedFromCrl: true, ...base };
+    }
+    if (hit.reason !== 8) {
+      return {
+        status: 'revoked',
+        reason: hit.reasonName,
+        reasonCode: hit.reason,
+        revocationDate: hit.revocationDate,
+        invalidityDate: hit.invalidityDate,
+        ...base
+      };
+    }
   }
+
   return { status: 'good', ...base };
+}
+
+/**
+ * CRL'in kapsamı bu sertifikayı içeriyor mu?
+ *
+ * Kapsam denetimi olmadan, "yalnız CA sertifikalarını içeren" bir listeye
+ * bakıp bir son kullanıcı sertifikasına "iptal edilmemiş" demek mümkün olur.
+ * Liste doğru, imza doğru, tarih doğru — ama cevap yanlış.
+ */
+function checkScope(crl, certDer, opts = {}) {
+  const idp = crl.idp;
+  if (!idp) return { covers: true, partialReasons: false };
+
+  const isCa = isCaCertificate(certDer);
+
+  if (idp.onlyAttributeCerts) {
+    return { covers: false, reason: 'CRL yalnız öznitelik sertifikalarını kapsıyor' };
+  }
+  if (idp.onlyUserCerts && isCa) {
+    return { covers: false, reason: 'CRL yalnız son kullanıcı sertifikalarını kapsıyor, bu bir CA' };
+  }
+  if (idp.onlyCaCerts && !isCa) {
+    return { covers: false, reason: 'CRL yalnız CA sertifikalarını kapsıyor, bu bir son kullanıcı' };
+  }
+
+  // Dağıtım noktası eşleşmesi: ikisi de biliniyorsa kesişmeleri gerekir.
+  // Kesişmiyorsa bu, sertifikanın ait olduğu bölüm DEĞİLDİR.
+  if (idp.uris.length && opts.checkDistributionPoint !== false) {
+    const certPoints = extractCDP(certDer).http || [];
+    if (certPoints.length && !idp.uris.some((u) => certPoints.includes(u))) {
+      return {
+        covers: false,
+        reason: 'CRL dağıtım noktası sertifikanın CDP değerleriyle eşleşmiyor'
+      };
+    }
+  }
+
+  // Bölümlenmiş (partitioned) CRL: yalnız bazı sebepleri kapsar. Buradan
+  // gelen "good" TAM bir cevap değildir ve öyle bildirilir.
+  return {
+    covers: true,
+    partialReasons: !!(idp.onlySomeReasons && idp.onlySomeReasons.length)
+  };
+}
+
+/** basicConstraints.cA bayrağı. */
+function isCaCertificate(certDer) {
+  try {
+    const bc = require('./x509_ext').extractBasicConstraints(certDer);
+    return !!(bc && bc.isCA);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Taban CRL + delta CRL birlikte değerlendirilir (RFC 5280 §5.2.4).
+ *
+ * Delta CRL, tabandan BU YANA olan değişiklikleri taşır. Doğru sıra:
+ * önce tabana bak, sonra deltayı ÜZERİNE uygula — delta bir girdiyi
+ * `removeFromCRL` ile geri alabilir (örn. certificateHold kaldırıldı).
+ *
+ * Deltanın tabana AİT olduğu `baseCrlNumber` ile doğrulanır; ilgisiz bir
+ * delta uygulamak, iptal bilgisini silmenin kolay yolu olurdu.
+ */
+function checkCrlWithDelta(certPemOrDer, issuerPemOrDer, baseCrlDer, deltaCrlDer, opts = {}) {
+  const baseResult = checkCrl(certPemOrDer, issuerPemOrDer, baseCrlDer, opts);
+  if (!deltaCrlDer) return baseResult;
+
+  const base = parseCrl(baseCrlDer);
+  const delta = parseCrl(deltaCrlDer);
+
+  if (!delta.isDelta) {
+    throw new CrlError('ERR_CRL_NOT_DELTA', 'Verilen ikinci CRL bir delta değil');
+  }
+  if (!base.crlNumber || !delta.baseCrlNumber) {
+    throw new CrlError('ERR_CRL_NUMBER_MISSING',
+      'Delta uygulanamıyor: cRLNumber ya da baseCRLNumber eksik');
+  }
+  // Delta, tabanın numarasından ESKİ bir tabana dayanamaz
+  if (BigInt('0x' + delta.baseCrlNumber) > BigInt('0x' + base.crlNumber)) {
+    throw new CrlError('ERR_CRL_DELTA_MISMATCH',
+      `Delta CRL daha yeni bir tabana ait (base=${base.crlNumber}, ` +
+      `delta.base=${delta.baseCrlNumber})`);
+  }
+
+  const deltaResult = checkCrl(certPemOrDer, issuerPemOrDer, deltaCrlDer,
+    { ...opts, allowDelta: true });
+
+  // Delta, taban sonrası durumdur: bir şey söylüyorsa o geçerlidir.
+  const certDer = Buffer.isBuffer(certPemOrDer) ? certPemOrDer : pemToDer(certPemOrDer);
+  const serialHex = getSerial(certDer).toString('hex').replace(/^0+(?=.)/, '') || '0';
+
+  if (delta.revoked.has(serialHex)) {
+    return { ...deltaResult, source: 'delta', baseCrlNumber: base.crlNumber };
+  }
+  return { ...baseResult, deltaApplied: true, deltaCrlNumber: delta.crlNumber };
 }
 
 /**
@@ -406,6 +746,10 @@ module.exports = {
   fetchCrl,
   parseCrl,
   checkCrl,
+  checkCrlWithDelta,
+  checkScope,
+  decodeReasonFlags,
+  KNOWN_CRL_EXTENSIONS,
   fetchAndCheckCrl,
   verifyCrlSignature,
   normalizeCrlBuffer,

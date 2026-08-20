@@ -300,8 +300,10 @@ Gerekçe `docs/05-web-studio.md` §2.1'de.
 | **v0.3** | Faz 4–5 | ✅ PDF yükle, düzenle, QR'lı damgayla imzala |
 | **v0.4** | Faz 6 | ✅ HTML/CSS ile ciddi belge tasarla |
 | **v1.0** | Faz 7–8 | ✅ Tarayıcıdan ve komut satırından uçtan uca |
+| **v1.1** | Güvenlik denetimi | ✅ P0/P1 açıklar kapatıldı — bkz. [08-guvenlik.md](./08-guvenlik.md) |
+| **v1.2** | Sahne modeli + görsel editör | ✅ Serbest yerleşimli belge yolu — bkz. [09-sahne-modeli.md](./09-sahne-modeli.md) |
 
-Test durumu: **271 test** (192 birim + 79 e2e) yeşil. E2E testleri ağa çıkmaz;
+Test durumu: **442 test** (birim + e2e) yeşil. E2E testleri ağa çıkmaz;
 yerel CA + OCSP + CRL + TSA ayağa kaldırır.
 
 ---
@@ -317,3 +319,6 @@ Yol haritasındaki işler bitti. Bir sonraki adım için doğal adaylar:
 | **CMYK ve renk profilleri** | Baskı işleri için gerekli | Motor bugün yalnız DeviceRGB üretiyor |
 | **SVG alt kümesi** | Vektör logo ve şemalar | Yeni bir yol motoru demek; PNG/JPEG bugün yetiyor |
 | **Uzak imzalayıcı (HSM / bulut)** | Kurumsal dağıtımın olağan yolu | `Signer` arayüzü hazır (`RemoteSigner`), gerçek bir HSM'e karşı sınanmadı |
+| **Sahne yolunda PDF/A + PDF/UA** | Serbest tasarımlar da arşivlenebilir olsun | Etiketli yapı ağacı akış yerleşiminden türüyor; sahnede okuma sırasını kullanıcının vermesi gerekir |
+| **Görsel regresyon (piksel karşılaştırma)** | Yerleşim kaymalarını erken yakalar | Bir raster motoru ya da harici araç gerekir; bugün içerik akışı metin olarak karşılaştırılıyor |
+| **Eşzamanlı düzenleme** | Çok kullanıcılı senaryolar | Geri alma zaten ters işlem tabanlı, yani altyapı uygun; çakışma çözümü ayrı bir tasarım işi |

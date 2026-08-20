@@ -7,11 +7,13 @@ const fs = require('fs');
  */
 class TtfParser {
     /**
-     * @param {string} filePath - TTF dosyasının disk yolu
+     * @param {Buffer|string} source - TTF baytları ya da dosya yolu
      */
-    constructor(filePath) {
-        // Font dosyasını tamamen RAM'e alıyoruz
-        this.buffer = fs.readFileSync(filePath);
+    constructor(source) {
+        // Kaynak bir dosya YOLU ya da doğrudan BAYT olabilir. Bayt yolu,
+        // çağıranın dosya erişimini kum havuzuna alabilmesi için gerekli:
+        // güvenilmez CSS'ten gelen @font-face yolları doğrudan fs'e verilemez.
+        this.buffer = Buffer.isBuffer(source) ? source : fs.readFileSync(source);
         this.offset = 0;
         this.tables = {};
         

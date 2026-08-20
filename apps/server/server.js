@@ -19,7 +19,8 @@ const crypto = require('crypto');
 const { URL } = require('url');
 
 const paper = require('@fitfak/paper');
-const { render } = require('@fitfak/pdf-html');
+const { render, renderAsync } = require('@fitfak/pdf-html');
+const { FontRegistry } = require('@fitfak/pdf-html/src/font/registry');
 const { renderStamp, templates } = require('@fitfak/stamp');
 const { PAdESManager } = require('@fitfak/pades/src/utils/pades_manager');
 const { buildVisibleSignature, fromManifestSlot } = require('@fitfak/pades/src/signature/visible');
@@ -29,6 +30,10 @@ const { verifyPdf } = require('@fitfak/verify');
 const p12 = require('@fitfak/pkcs12');
 const pdfDoc = require('@fitfak/pdf-doc');
 const conformance = require('@fitfak/conformance');
+const scene = require('@fitfak/pdf-scene');
+const { Registry, documentHash, recordFromReport } = require('@fitfak/registry');
+const policy = require('./src/policy');
+const { Collab } = require('./src/collab');
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
@@ -36,11 +41,21 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'studio');
 const CONFIG = {
   port: Number(process.env.PORT) || 8787,
   host: process.env.HOST || '127.0.0.1',
-  maxBodyBytes: Number(process.env.MAX_BODY) || 32 * 1024 * 1024,
+  maxBodyBytes: policy.LIMITS.maxBodyBytes,
   sessionTtlMs: 120000,
   tsaUrl: process.env.TSA_URL || 'http://timestamp.digicert.com',
-  allowServerSidePfx: process.env.ALLOW_SERVER_PFX !== '0',
-  defaultFont: process.env.PDF_FONT || path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf')
+  // Özel anahtarın sunucuya gelmesi VARSAYILAN OLARAK KAPALIDIR.
+  // Açık şekilde '1' verilmediği sürece bu yol kullanılamaz: yanlışlıkla
+  // açık kalan bir dağıtım, kullanıcıların özel anahtarlarını toplar.
+  // Birincil imzalama modeli iki fazlı tarayıcı imzalamasıdır.
+  allowServerSidePfx: process.env.ALLOW_SERVER_PFX === '1',
+  defaultFont: process.env.PDF_FONT || path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf'),
+  // Sunulabilir fontların TEK dizini. İstemci buradan yalnız AİLE ADI seçer.
+  // Yalnız .ttf/.otf taranır; aynı dizindeki görseller etkilenmez.
+  fontDir: process.env.FONT_DIR || path.join(ROOT, 'assets'),
+  // Belgeden gelen varlıkların okunabileceği TEK dizin (kum havuzu).
+  // Depo kökü VERİLMEZ: güvenilmez HTML kaynak kodunu ve anahtarları okurdu.
+  assetRoot: process.env.ASSET_ROOT || path.join(ROOT, 'assets')
 };
 
 /* ------------------------------------------------------------------ */
@@ -48,6 +63,115 @@ const CONFIG = {
 /* ------------------------------------------------------------------ */
 
 const sessions = new Map();
+
+/**
+ * Hız sınırlayıcı.
+ *
+ * `RATE_LIMIT_DIR` tanımlıysa sayaçlar dosyada paylaşılır ve aynı makinedeki
+ * bütün süreçler AYNI sayacı görür. Tanımlı değilse sayaç süreç içindedir:
+ * tek süreçli kurulumda doğru, `cluster` ile çalışan bir kurulumda sınırı
+ * süreç sayısıyla çarpar. Hangisi olduğu `/api/health` içinde bildirilir —
+ * işletmecinin bunu tahmin etmesi gerekmesin.
+ */
+const rateLimiter = new policy.RateLimiter();
+
+/* ------------------------------------------------------------------ */
+/* Doğrulama kaydı                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * İmzalanan belgelerin eklemeli kaydı.
+ *
+ * Karekod tarayıcısı elinde yalnız bir ÖZET tutar; belgeyi görmediği için
+ * imzayı kendisi doğrulayamaz. Defter, imza ANINDA yapılan doğrulamanın
+ * sonucunu saklar ve tarayıcı onu okur.
+ *
+ * `REGISTRY_DIR` verilmezse defter KAPALIDIR ve tarayıcı dürüstçe
+ * "kayıt yok" der. Kapalı bir defteri açıkmış gibi göstermek, tam olarak
+ * kaçındığımız şeydir.
+ */
+const registry = new Registry({
+  dir: process.env.REGISTRY_DIR || '',
+  key: process.env.REGISTRY_KEY || ''
+});
+
+/**
+ * İmzalanan belgeyi deftere yazar.
+ *
+ * Kayıt, imzanın KENDİSİ doğrulandıktan sonra yazılır: "imzalandı" ile
+ * "geçerli imzalandı" farklı şeylerdir ve deftere yazılması gereken
+ * ikincisidir. Doğrulama başarısız olsa bile kayıt yazılır — sonucu
+ * `indication` alanında durur; başarısızlığı gizlemek, defteri işe
+ * yaramaz kılardı.
+ */
+async function recordSignature(pdf, o = {}) {
+  if (!registry.enabled) return null;
+  try {
+    const report = await verifyPdf(pdf, {
+      trustAnchors: policy.trustAnchors(),
+      allowNetwork: false
+    });
+    const entry = recordFromReport(report, {
+      documentHash: documentHash(pdf),
+      docNo: o.docNo,
+      level: o.level
+    });
+    const written = registry.append(entry);
+    policy.auditLog({
+      event: 'registry', outcome: 'recorded',
+      seq: written.seq, indication: entry.indication
+    });
+    return { seq: written.seq, documentHash: entry.documentHash };
+  } catch (err) {
+    // Defter yazılamıyorsa imza yine de geçerlidir: kullanıcıya belgeyi
+    // vermemek orantısız olurdu. Ama sessiz kalınmaz.
+    console.warn('[kayıt defteri] yazılamadı:', err.message);
+    policy.auditLog({ event: 'registry', outcome: 'failed', error: err.code || 'ERR' });
+    return null;
+  }
+}
+
+/**
+ * Eşzamanlı düzenleme oturumları.
+ *
+ * Sunucu SIRALAR, herkes o sırayı uygular. Oturumlar yalnız bellektedir:
+ * sunucu yeniden başlarsa oturum kaybolur, belge kaybolmaz — her
+ * istemcinin kendi kopyası vardır.
+ */
+const collab = new Collab();
+
+/* ------------------------------------------------------------------ */
+/* Font kayıt defteri                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sunucunun sunabildiği fontlar.
+ *
+ * İstemci font DOSYA YOLU veremez — bu, belgeden gelen bir yolun dosya
+ * sistemine ulaşması olurdu (docs/08-guvenlik.md G-01). İstemci yalnız
+ * AİLE ADI seçer; hangi dosyanın karşılık geldiğine sunucu karar verir.
+ *
+ * Dizin ilk kullanımda taranır: açılışta taramak, font dizini olmayan bir
+ * kurulumda gereksiz iş yapardı.
+ */
+let _fontRegistry = null;
+
+function fontRegistry() {
+  if (_fontRegistry) return _fontRegistry;
+
+  const registry = new FontRegistry({ maxBytes: policy.LIMITS.maxFontBytes });
+  registry.scanDirectory(CONFIG.fontDir);
+
+  // Dizinde hiç font yoksa en azından varsayılan font kayıtlı olsun:
+  // fontsuz bir sunucu hiçbir belge üretemez.
+  if (registry.isEmpty) {
+    try { registry.register({ file: CONFIG.defaultFont, origin: 'default' }); }
+    catch (err) { console.warn('Varsayılan font kaydedilemedi:', err.message); }
+  }
+
+  _fontRegistry = registry;
+  return registry;
+}
 
 function putSession(data) {
   const id = crypto.randomBytes(16).toString('hex');
@@ -104,25 +228,71 @@ function sendError(res, status, code, message, details) {
   sendJson(res, status, { error: { code, message, ...(details ? { details } : {}) } });
 }
 
+/**
+ * Gövdeyi SINIRLI olarak okur.
+ *
+ * Sınır aşıldığında iki şeyi aynı anda istiyoruz:
+ *   1. fazladan bayt BELLEĞE ALINMASIN,
+ *   2. istemci 413 yanıtını GÖRSÜN.
+ *
+ * Soketi anında koparmak (2)'yi imkânsız kılar: istemci "bağlantı sıfırlandı"
+ * görür ve neden reddedildiğini asla öğrenemez — hata ayıklanamaz bir uç.
+ * Bu yüzden kalan baytlar okunur ama biriktirilmez; israfı sınırlamak için
+ * yalnız sınırın iki katına kadar tolerans gösterilir, sonrası koparılır.
+ */
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    let chunks = [];
     let total = 0;
+    let overflowed = false;
+
     req.on('data', (c) => {
       total += c.length;
+
+      if (overflowed) {
+        // Yanıt yazılana kadar biraz tolerans; sonra bağlantı koparılır.
+        if (total > maxBytes * 2) req.destroy();
+        return;
+      }
       if (total > maxBytes) {
-        reject(Object.assign(new Error('İstek gövdesi çok büyük'), { code: 'ERR_BODY_TOO_LARGE' }));
-        req.destroy();
+        overflowed = true;
+        chunks = [];                                  // birikeni de bırak
+        reject(Object.assign(new Error('İstek gövdesi çok büyük'),
+          { code: 'ERR_BODY_TOO_LARGE', status: 413 }));
         return;
       }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+
+    req.on('end', () => { if (!overflowed) resolve(Buffer.concat(chunks)); });
+    req.on('error', (err) => { if (!overflowed) reject(err); });
   });
 }
 
+/**
+ * `Content-Type: application/json` şart koşulur.
+ *
+ * Sadece biçim titizliği değil: tarayıcılar `text/plain`, `multipart/form-data`
+ * ve `application/x-www-form-urlencoded` gövdeli POST'ları "basit istek" sayar
+ * ve ÖN KONTROL (preflight) yapmadan başka kaynaklara gönderir. JSON şartı,
+ * çapraz kaynaklı bir sayfanın bu uçları sessizce tetiklemesini engeller.
+ */
+function requireJsonContentType(req) {
+  const len = req.headers['content-length'];
+  const chunked = req.headers['transfer-encoding'] !== undefined;
+  // Gövdesiz istekte içerik türü aramak anlamsızdır
+  if (!chunked && (len === undefined || len === '0')) return;
+
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') {
+    throw Object.assign(
+      new Error(`Content-Type application/json olmalı (gelen: ${type || 'yok'})`),
+      { code: 'ERR_CONTENT_TYPE', status: 415 });
+  }
+}
+
 async function readJson(req) {
+  requireJsonContentType(req);
   const buf = await readBody(req, CONFIG.maxBodyBytes);
   if (!buf.length) return {};
   try {
@@ -156,7 +326,22 @@ const routes = {
       themes: paper.THEMES,
       stampTemplates: Object.keys(templates),
       conformanceProfiles: ['pdf/a-1b', 'pdf/a-2b', 'pdf/a-3b', 'pdf/ua', 'pdf/a-2b+pdf/ua'],
+      // İstemci hangi aileleri seçebileceğini BURADAN öğrenir; tahmin edip
+      // sessizce yanlış fontla belge üretmez.
+      fonts: fontRegistry().describe(),
       serverSidePfx: CONFIG.allowServerSidePfx,
+      remoteAssets: policy.REMOTE.enabled,
+      // Sayaç nerede duruyor? "Sınır var" demek yetmez; sınırın kaç süreçte
+      // geçerli olduğu da bilinmelidir.
+      // Defter açık mı, zinciri sağlam mı? "Doğrulama var" demek yetmez.
+      registry: registry.describe(),
+      collab: collab.describe(),
+      rateLimit: {
+        windowMs: policy.RATE.windowMs,
+        maxRequests: policy.RATE.maxRequests,
+        maxSensitive: policy.RATE.maxSensitive,
+        store: rateLimiter.describe()
+      },
       maxBodyBytes: CONFIG.maxBodyBytes
     });
   },
@@ -166,18 +351,49 @@ const routes = {
     const body = await readJson(req);
     if (!body.html) return sendError(res, 400, 'ERR_HTML_MISSING', 'html alanı zorunlu');
 
+    // Yerleşim motoru girdiyle DOĞRUSAL DEĞİL ölçeklenir; sınır burada
+    policy.checkBytes(Buffer.from(String(body.html), 'utf8'), 'maxHtmlBytes', 'HTML');
+    const cssTotal = []
+      .concat(body.css || [])
+      .reduce((n, c) => n + Buffer.byteLength(String(c), 'utf8'), 0);
+    policy.checkBytes({ length: cssTotal }, 'maxCssBytes', 'CSS');
+    policy.checkCount((body.fonts || []).length, 'maxFonts', 'font');
+
     const css = [];
     if (body.theme !== null) css.push(...paper.stack(body.theme || 'kurumsal'));
     if (body.css) css.push(...(Array.isArray(body.css) ? body.css : [body.css]));
 
-    const result = render({
+    const result = await renderAsync({
       html: body.html,
       css,
-      fonts: body.fonts || [{ family: 'Ubuntu', src: CONFIG.defaultFont }],
+      // İstemci font DOSYASI değil AİLE ADI seçer; hangi dosyanın
+      // yükleneceğine kayıt defteri karar verir (bkz. G-01).
+      fonts: htmlFonts(body.fonts),
       page: body.page || { size: 'A4', margin: '20mm 18mm' },
       metadata: body.metadata || {},
       conformance: body.conformance || null,
-      baseDir: ROOT
+      baseDir: ROOT,
+      // Belgeden gelen görsel/font yolları YALNIZ bu dizinden okunabilir.
+      // ROOT verilseydi güvenilmez HTML tüm depoyu okurdu.
+      assetRoots: [CONFIG.assetRoot],
+      assetLimits: {
+        maxImageBytes: policy.LIMITS.maxImageBytes,
+        maxImagePixels: policy.LIMITS.maxImagePixels,
+        maxImageDecodedBytes: policy.LIMITS.maxImageDecodedBytes,
+        maxFontBytes: policy.LIMITS.maxFontBytes,
+        maxAssets: policy.LIMITS.maxAssets
+      },
+      // Uzak varlıklar VARSAYILAN OLARAK KAPALIDIR. Açmak için
+      // REMOTE_ASSET_HOSTS tanımlanmalıdır: izin listesi olmadan açmak,
+      // belgeye sunucunun ağına istek attırma yetkisi vermektir.
+      allowRemoteAssets: policy.REMOTE.enabled,
+      remote: {
+        allowHosts: policy.REMOTE.allowHosts,
+        maxBytes: policy.LIMITS.maxImageBytes,
+        timeoutMs: policy.REMOTE.timeoutMs,
+        maxRedirects: policy.REMOTE.maxRedirects,
+        maxRemote: policy.REMOTE.maxPerDocument
+      }
     });
 
     sendJson(res, 200, {
@@ -186,6 +402,227 @@ const routes = {
       warnings: result.warnings,
       conformance: result.conformance || null
     });
+  },
+
+  /**
+   * SAHNE → PDF.
+   *
+   * Görsel editörün çıktısı buradan geçer. Sahne düz JSON'dur; varlıkların
+   * baytları ayrı bir dizide base64 olarak gelir. Varlıkları sahnenin içine
+   * gömmek, tek bir görselin belgeyi on kat büyütmesi demekti.
+   */
+  'POST /api/scene/render': async (req, res) => {
+    const body = await readJson(req);
+    if (!body.scene || typeof body.scene !== 'object') {
+      return sendError(res, 400, 'ERR_SCENE_MISSING', 'scene alanı zorunlu');
+    }
+
+    const incoming = Array.isArray(body.assets) ? body.assets : [];
+    policy.checkCount(incoming.length, 'maxAssets', 'varlık');
+
+    const assets = new scene.AssetManager({
+      limits: {
+        maxBytes: policy.LIMITS.maxImageBytes,
+        maxAssets: policy.LIMITS.maxAssets,
+        maxPixels: policy.LIMITS.maxImagePixels
+      }
+    });
+
+    // Varlıkların kimliği İÇERİKTEN türer; istemcinin bildirdiği kimliğe
+    // güvenilmez. Uyuşmazsa sahnedeki gönderme kırılır ve doğrulayıcı bunu
+    // ERR_ASSET_MISSING olarak bildirir — sessizce yanlış görsel gömülmez.
+    const remap = new Map();
+    for (const a of incoming) {
+      const bytes = unb64(a.base64 || a.bytes);
+      if (!bytes.length) continue;
+      try {
+        const added = assets.add(bytes, { name: a.name });
+        if (a.id && a.id !== added.id) remap.set(a.id, added.id);
+      } catch (err) {
+        return sendError(res, err.code === 'ERR_ASSET_TOO_LARGE' ? 413 : 400,
+          err.code || 'ERR_ASSET', err.message);
+      }
+    }
+
+    // Sahnenin varlık listesi SUNUCUNUN hesabıyla değiştirilir. İstemcinin
+    // bildirdiği üst veriye (boyut, özet, ölçü) güvenmek, gerçekte olmayan
+    // bir görselin "var" sayılmasına ya da yanlış ölçüyle çizilmesine yol açar.
+    const doc = rewriteAssetIds(body.scene, remap);
+    doc.assets = assets.manifest();
+
+    let result;
+    try {
+      result = scene.compileToPdf(doc, {
+        assets,
+        fonts: sceneFonts(body.fonts),
+        // PDF/A + PDF/UA sahne yolunda da istenebilir. Bilinmeyen profil
+        // sessizce yutulmaz: derleyici uyarı üretir ve iddia edilmez.
+        conformance: body.conformance || null,
+        compress: body.compress !== false
+      });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_SCENE',
+        err.message, err.issues ? err.issues.slice(0, 20) : undefined);
+    }
+
+    sendJson(res, 200, {
+      pdf: b64(result.pdf),
+      manifest: result.manifest,
+      warnings: result.warnings,
+      conformance: result.conformance || null
+    });
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* Ortak düzenleme                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /** Yeni ortak oturum açar; açan kişi ilk katılımcıdır. */
+  'POST /api/collab/create': async (req, res) => {
+    const body = await readJson(req);
+    const { session, client } = collab.create(body.scene, body.name);
+    sendJson(res, 200, {
+      sessionId: session.id,
+      clientId: client.clientId,
+      version: session.version,
+      scene: session.scene.toJSON()
+    });
+  },
+
+  /** Var olan oturuma katılır ve belgenin SON hâlini alır. */
+  'POST /api/collab/join': async (req, res) => {
+    const body = await readJson(req);
+    const client = collab.join(body.sessionId, body.name);
+    const session = collab.get(body.sessionId);
+    sendJson(res, 200, {
+      ...client,
+      scene: session.scene.toJSON(),
+      peers: session.describe().peers
+    });
+  },
+
+  /**
+   * İşlemleri gönderir.
+   *
+   * `baseVersion` istemcinin GÖRDÜĞÜ son sürümdür. Arada başkasının
+   * yaptığı çakışan bir değişiklik varsa işlem yine uygulanır (son gelen
+   * kazanır) ama `overwritten` ile bildirilir: kullanıcı neyin üzerine
+   * yazdığını bilmelidir.
+   */
+  'POST /api/collab/ops': async (req, res) => {
+    const body = await readJson(req);
+    const session = collab.get(body.sessionId);
+    const result = session.commit(
+      String(body.clientId || ''), Number(body.baseVersion) || 0, body.ops);
+    sendJson(res, 200, result);
+  },
+
+  /** Oturumdan ayrılır (sekme kapanınca `sendBeacon` ile de çağrılabilir). */
+  'POST /api/collab/leave': async (req, res) => {
+    const body = await readJson(req);
+    collab.leave(String(body.sessionId || ''), String(body.clientId || ''));
+    sendJson(res, 200, { ok: true });
+  },
+
+  /**
+   * Olay akışı (SSE).
+   *
+   * WebSocket değil: tek yönlü bir akış yeterlidir (istemci → sunucu
+   * yolu zaten POST'tur) ve SSE düz `node:http` ile çalışır, ek bağımlılık
+   * ve el sıkışma protokolü gerektirmez.
+   */
+  'GET /api/collab/stream': async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const sessionId = url.searchParams.get('sessionId') || '';
+    const clientId = url.searchParams.get('clientId') || '';
+    const since = Number(url.searchParams.get('since')) || 0;
+
+    const session = collab.get(sessionId);
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      ...SECURITY_HEADERS
+    });
+
+    collab.attach(sessionId, clientId, res);
+
+    // Bağlantı koptuğu sırada kaçırılan işlemler: istemci `since` ile
+    // nerede kaldığını söyler ve aradaki her şeyi alır.
+    const missed = session.since(since);
+    if (missed.length) {
+      res.write(`data: ${JSON.stringify({
+        type: 'ops', version: session.version,
+        clientId: null, ops: missed.map((e) => e.op)
+      })}\n\n`);
+    }
+
+    // Ara vuruş: bazı vekiller sessiz bağlantıyı kapatır.
+    const beat = setInterval(() => {
+      try { res.write(': ping\n\n'); } catch { /* kopmuş */ }
+    }, 25_000);
+    if (beat.unref) beat.unref();
+
+    req.on('close', () => {
+      clearInterval(beat);
+      collab.leave(sessionId, clientId);
+    });
+  },
+
+  /** PDF → SAHNE: var olan belgeyi düzenlenebilir hâle getirir. */
+  'POST /api/scene/import/pdf': async (req, res) => {
+    const body = await readJson(req);
+    const pdf = unb64(body.pdf);
+    if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+
+    try {
+      const { scene: imported, warnings } = scene.importFromPdf(pdf, {
+        password: body.password || '',
+        fonts: sceneFonts(body.fonts),
+        maxPages: policy.LIMITS.maxPages
+      });
+      sendJson(res, 200, { scene: imported.toJSON(), warnings });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
+    }
+  },
+
+  /** HTML → SAHNE: akış belgesini serbest yerleşime düzleştirir. */
+  'POST /api/scene/import/html': async (req, res) => {
+    const body = await readJson(req);
+    if (!body.html) return sendError(res, 400, 'ERR_HTML_MISSING', 'html alanı zorunlu');
+    policy.checkBytes(Buffer.from(String(body.html), 'utf8'), 'maxHtmlBytes', 'HTML');
+
+    const css = [];
+    if (body.theme !== null) css.push(...paper.stack(body.theme || 'kurumsal'));
+    if (body.css) css.push(...(Array.isArray(body.css) ? body.css : [body.css]));
+
+    try {
+      const { scene: imported, warnings } = scene.importFromHtml({
+        html: body.html, css,
+        fonts: sceneFonts(body.fonts),
+        page: body.page || { size: 'A4', margin: '20mm 18mm' },
+        baseDir: ROOT,
+        assetRoots: [CONFIG.assetRoot],
+        assetLimits: {
+          maxImageBytes: policy.LIMITS.maxImageBytes,
+          maxImagePixels: policy.LIMITS.maxImagePixels,
+          maxImageDecodedBytes: policy.LIMITS.maxImageDecodedBytes,
+          maxFontBytes: policy.LIMITS.maxFontBytes,
+          maxAssets: policy.LIMITS.maxAssets
+        }
+      });
+
+      // Varlık baytları da dönmeli: tarayıcıdaki editör onları gösterecek
+      const assetBytes = imported.assets.manifest().map((a) => ({
+        ...a, base64: b64(imported.assets.bytes(a.id))
+      }));
+      sendJson(res, 200, { scene: imported.toJSON(), assets: assetBytes, warnings });
+    } catch (err) {
+      return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
+    }
   },
 
   /** PDF yapısını incele (sayfa sayısı, imzalar) */
@@ -212,12 +649,15 @@ const routes = {
     const pdf = unb64(body.pdf);
     if (!pdf.length) return sendError(res, 400, 'ERR_PDF_MISSING', 'pdf alanı zorunlu');
 
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+
     let doc;
     try {
       doc = pdfDoc.PdfDocument.load(pdf, { password: body.password || '' });
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
     }
+    policy.checkPdf(pdf, doc);
 
     const pages = [];
     for (let i = 0; i < doc.pageCount; i++) {
@@ -262,6 +702,8 @@ const routes = {
     if (!Array.isArray(body.ops) || !body.ops.length) {
       return sendError(res, 400, 'ERR_OPS_MISSING', 'ops dizisi zorunlu');
     }
+    policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
+    policy.checkCount(body.ops.length, 'maxOps', 'düzenleme işlemi');
 
     let doc;
     try {
@@ -269,6 +711,7 @@ const routes = {
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_PDF_OPEN', err.message);
     }
+    policy.checkPdf(pdf, doc);
 
     const applied = [];
     try {
@@ -378,7 +821,9 @@ const routes = {
       writer, prepared, fieldName,
       level: (body.level || 'T').toUpperCase(),
       certPem: body.certPem,
-      chainPems: body.chainPems || []
+      chainPems: body.chainPems || [],
+      // Belge numarası karekodun içindedir; defter kaydı onunla aranabilsin.
+      docNo: (body.visible && body.visible.docNo) || body.docNo || ''
     });
 
     sendJson(res, 200, {
@@ -454,12 +899,17 @@ const routes = {
       }
     }
 
+    const recorded = await recordSignature(pdf, {
+      docNo: session.docNo, level: achieved
+    });
+
     sendJson(res, 200, {
       pdf: b64(pdf),
       requestedLevel: session.level,
       achievedLevel: achieved,
       reasons,
-      ltvReport
+      ltvReport,
+      registry: recorded
     });
   },
 
@@ -491,12 +941,18 @@ const routes = {
         ltv: { prefer: 'ocsp-first' }
       });
 
+      const recorded = await recordSignature(result.pdf, {
+        docNo: (body.visible && body.visible.docNo) || body.docNo,
+        level: result.achievedLevel
+      });
+
       sendJson(res, 200, {
         pdf: b64(result.pdf),
         requestedLevel: result.requestedLevel,
         achievedLevel: result.achievedLevel,
         reasons: result.reasons,
-        ltvReport: result.ltvReport || null
+        ltvReport: result.ltvReport || null,
+        registry: recorded
       });
     } finally {
       pfx.fill(0);                       // parolayı ve anahtarı bellekte bırakma
@@ -660,6 +1116,68 @@ function applyOp(doc, op) {
 }
 
 /** İstek gövdesinden görünür imza yapılandırması kurar. */
+/**
+ * Sahne derleyicisi için font listesi.
+ *
+ * İstemci font DOSYA YOLU veremez: bu, belgeden gelen bir yolun dosya
+ * sistemine ulaşması demek olurdu (bkz. docs/08-guvenlik.md G-01). Yalnız
+ * sunucunun tanıdığı aileler seçilebilir.
+ */
+/**
+ * HTML yolu için font listesi.
+ *
+ * CSS `font-family` istekleri belgeden gelir; hangi dosyaların yükleneceği
+ * ise sunucunun kararıdır. Hiçbir aile belirtilmezse HEPSİ yüklenir —
+ * belgedeki CSS hangisini isterse istesin bulabilsin diye.
+ */
+function htmlFonts(requested) {
+  const registry = fontRegistry();
+  const families = (Array.isArray(requested) ? requested : [])
+    .map((f) => (typeof f === 'string' ? f : (f && f.family)))
+    .filter(Boolean);
+
+  const wanted = families.length ? families : registry.familyNames();
+  const { faces } = registry.facesFor(wanted);
+  return faces.length ? faces : [{ family: 'Ubuntu', src: CONFIG.defaultFont }];
+}
+
+function sceneFonts(requested) {
+  const registry = fontRegistry();
+  const families = (Array.isArray(requested) ? requested : [])
+    .map((f) => (typeof f === 'string' ? f : (f && f.family)))
+    .filter(Boolean);
+
+  // İstenen aile yoksa varsayılan aile döner; hangi ailenin bulunamadığını
+  // derleyici `WARN_FONT_FALLBACK` ile bildirir, burada sessizce yutulmaz.
+  const wanted = families.length ? families : [registry.defaultFamily()].filter(Boolean);
+  const { faces } = registry.facesFor(wanted);
+  if (faces.length) return faces;
+
+  const fallback = registry.facesFor([registry.defaultFamily()].filter(Boolean));
+  return fallback.faces.length
+    ? fallback.faces
+    : [{ family: 'Ubuntu', src: CONFIG.defaultFont }];
+}
+
+/**
+ * Sahnedeki varlık kimliklerini sunucunun hesapladıklarıyla değiştirir.
+ *
+ * Kimlik içerikten türer; istemci farklı bir kimlik bildirdiyse (eski
+ * sürüm, elle düzenlenmiş dosya, kötü niyet) gönderme yeniden bağlanır.
+ */
+function rewriteAssetIds(doc, remap) {
+  const walk = (node) => {
+    if (node.assetId && remap.has(node.assetId)) node.assetId = remap.get(node.assetId);
+    if (Array.isArray(node.children)) node.children.forEach(walk);
+  };
+  const copy = JSON.parse(JSON.stringify(doc));
+  for (const page of copy.pages || []) (page.nodes || []).forEach(walk);
+  if (Array.isArray(copy.assets)) {
+    copy.assets = copy.assets.map((a) => (remap.has(a.id) ? { ...a, id: remap.get(a.id) } : a));
+  }
+  return copy;
+}
+
 function buildVisibleForRequest(body) {
   if (body.visible === false) return null;
   const v = body.visible || {};
@@ -719,6 +1237,9 @@ const MIME = {
 /** Yalnız bu uzantılar servis edilir — kaynak/manifest dosyaları sızmasın. */
 const SERVABLE = new Set(Object.keys(MIME));
 
+/** Sahne tarayıcı paketi — süreç ömrü boyunca bir kez üretilir. */
+let sceneBundleCache = null;
+
 function serveStatic(pathname, res) {
   // Yüzde kodlaması ÇÖZÜLDÜKTEN sonra kontrol edilir; aksi hâlde `%2e%2e`
   // ile dizin dışına çıkılabilir.
@@ -750,6 +1271,23 @@ function serveStatic(pathname, res) {
   let file = resolved;
   if (rel === '/vendor/paper.css') file = path.join(paper.DIST, 'paper.css');
 
+  // Sahne modelinin tarayıcı paketi ANINDA üretilir: editör ile sunucu
+  // kesinlikle aynı kaynaktan çalışır, "dist güncellenmemiş" diye bir
+  // ayrışma olamaz.
+  if (rel === '/vendor/scene.esm.js') {
+    if (!sceneBundleCache) {
+      sceneBundleCache = Buffer.from(
+        require('@fitfak/pdf-scene/browser').buildBrowserBundle(), 'utf8');
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME['.js'],
+      'Content-Length': sceneBundleCache.length,
+      'Cache-Control': 'no-cache',
+      ...SECURITY_HEADERS
+    });
+    return res.end(sceneBundleCache);
+  }
+
   fs.readFile(file, (err, data) => {
     if (err) {
       return sendError(res, 404, 'ERR_NOT_FOUND', `Bulunamadı: ${rel}`);
@@ -780,13 +1318,45 @@ function createServer() {
 
     const handler = routes[key];
     if (handler) {
+      /* --- Erişim denetimi ------------------------------------------
+       * Hassas uçlar (imzalama, PFX, LTV) belirteç ister. Belirteç hiç
+       * yapılandırılmamışsa sunucu yalnız yerel kullanım varsayar ve
+       * başlangıçta uyarır. */
+      const decision = policy.authorize(req, key);
+      if (!decision.allowed) {
+        policy.auditLog({
+          event: 'auth.denied', route: key,
+          client: policy.clientKey(req), outcome: decision.code
+        });
+        return sendError(res, decision.status, decision.code, decision.message);
+      }
+
+      /* --- Hız sınırı ---------------------------------------------- */
+      const limit = decision.kind === 'sensitive'
+        ? policy.RATE.maxSensitive : policy.RATE.maxRequests;
+      const rate = rateLimiter.hit(policy.clientKey(req), limit);
+      if (!rate.allowed) {
+        res.setHeader('Retry-After', Math.ceil(rate.retryAfterMs / 1000));
+        return sendError(res, 429, 'ERR_RATE_LIMIT',
+          `Çok fazla istek; ${Math.ceil(rate.retryAfterMs / 1000)} saniye sonra deneyin.`);
+      }
+
+      if (decision.kind === 'sensitive') {
+        policy.auditLog({
+          event: 'request', route: key, client: policy.clientKey(req),
+          outcome: decision.authenticated ? 'authenticated' : 'unauthenticated'
+        });
+      }
+
       try {
         await handler(req, res);
       } catch (err) {
         if (!res.headersSent) {
-          const status = err.code === 'ERR_BODY_TOO_LARGE' ? 413
-            : err.code === 'ERR_BAD_JSON' ? 400
-            : 500;
+          const status = err.status
+            || (err.code === 'ERR_BODY_TOO_LARGE' ? 413
+              : err.code === 'ERR_TOO_LARGE' ? 413
+              : /^ERR_(BAD_JSON|TOO_MANY|PDF_|ASSET_|PFX_|OP_|HTML_|CSS_)/.test(err.code || '') ? 400
+              : 500);
           sendError(res, status, err.code || 'ERR_INTERNAL', err.message);
         }
         if (!err.code) console.error('[sunucu hatası]', err);
@@ -818,12 +1388,25 @@ function start() {
   try { paper.build(); } catch (err) { console.warn('paper.css derlenemedi:', err.message); }
 
   const server = createServer();
+  // Yavaş istemci saldırıları (Slowloris) için zaman aşımları
+  server.requestTimeout = policy.LIMITS.requestTimeoutMs;
+  server.headersTimeout = policy.LIMITS.headersTimeoutMs;
+
   server.listen(CONFIG.port, CONFIG.host, () => {
     console.log(`\n  FITFAK Belge Studio`);
     console.log(`  → http://${CONFIG.host}:${CONFIG.port}\n`);
     console.log(`  TSA          : ${CONFIG.tsaUrl}`);
     console.log(`  Sunucu PFX   : ${CONFIG.allowServerSidePfx ? 'açık (opt-in mod)' : 'kapalı'}`);
     console.log(`  Gövde sınırı : ${(CONFIG.maxBodyBytes / 1024 / 1024).toFixed(0)} MB`);
+    console.log(`  Kimlik doğr. : ${policy.authEnabled() ? 'açık (API_TOKENS)' : 'KAPALI'}`);
+    console.log(`  Varlık kökü  : ${CONFIG.assetRoot}`);
+
+    const dısaAcik = CONFIG.host !== '127.0.0.1' && CONFIG.host !== 'localhost' && CONFIG.host !== '::1';
+    if (dısaAcik && !policy.authEnabled()) {
+      console.warn('\n  ⚠ UYARI: sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
+        'tanımlı değil.\n    İmzalama ve PFX uçları kimlik doğrulamasız erişilebilir. ' +
+        'API_TOKENS ayarlayın.\n');
+    }
     console.log(`  Not: Varsayılan akışta özel anahtar tarayıcıdan çıkmaz.\n`);
   });
   return server;
@@ -831,4 +1414,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { createServer, start, CONFIG, routes };
+module.exports = { createServer, start, CONFIG, routes, policy, rateLimiter, collab, registry };

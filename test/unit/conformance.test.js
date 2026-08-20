@@ -21,7 +21,9 @@ const { PdfDocument, Dict, Name, Stream } = require('@fitfak/pdf-doc');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FONT = path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf');
-const LOGO = path.join(ROOT, 'apps', 'studio', 'favicon.png');
+// Varlıklar kum havuzuna (baseDir = ROOT) GÖRE verilir. Mutlak yol vermek
+// artık bilinçli olarak reddedilir; bkz. src/assets/resolver.js.
+const LOGO = 'apps/studio/favicon.png';
 
 const DOC = `<!doctype html><html lang="tr"><body>
   <h1>Sözleşme</h1>

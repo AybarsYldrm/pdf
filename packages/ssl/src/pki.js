@@ -409,20 +409,114 @@ function generateCSR(keyInfo, nameAttrs, sans = [], hashAlg) {
  * @param {{ keyType, hashAlg, n?, d?, curveName?, privateKey?, skid, name }} issuerCA
  * @param {{ serial: bigint, date?: Date, reason?: number }[]} revokedList
  */
+/** IA5String (tag 0x16) — GeneralName [6] uniformResourceIdentifier gövdesi. */
+function tlvIa5(text) {
+  const body = Buffer.from(String(text), 'ascii');
+  const len = body.length < 0x80
+    ? Buffer.from([body.length])
+    : Buffer.concat([Buffer.from([0x81]), Buffer.from([body.length])]);
+  return Buffer.concat([Buffer.from([0x86]), len, body]);  // [6] IMPLICIT IA5String
+}
+
+/**
+ * IssuingDistributionPoint gövdesi (RFC 5280 §5.2.5).
+ *
+ * Bu uzantı CRL'in KAPSAMINI söyler: "yalnız son kullanıcı sertifikaları",
+ * "yalnız şu sebepler", "bu liste başkası adına yayımlandı". Doğrulayıcı
+ * bunu okumazsa yanlış listeye bakıp doğru cevap verdiğini sanır.
+ */
+function buildIdp(idp) {
+  const parts = [];
+
+  if (idp.uris && idp.uris.length) {
+    // distributionPoint [0] → fullName [0] → GeneralNames
+    parts.push(CTX(0, CTX(0, ...idp.uris.map(tlvIa5))));
+  }
+  if (idp.onlyUserCerts) parts.push(CTXI(1, Buffer.from([0xff])));
+  if (idp.onlyCaCerts) parts.push(CTXI(2, Buffer.from([0xff])));
+  if (idp.onlySomeReasons && idp.onlySomeReasons.length) {
+    parts.push(CTXI(3, encodeReasonFlags(idp.onlySomeReasons)));
+  }
+  if (idp.indirect) parts.push(CTXI(4, Buffer.from([0xff])));
+  if (idp.onlyAttributeCerts) parts.push(CTXI(5, Buffer.from([0xff])));
+
+  return SEQ(...parts);
+}
+
+/** Sebep adlarını ReasonFlags BIT STRING gövdesine çevirir. */
+function encodeReasonFlags(names) {
+  const order = [
+    'unused', 'keyCompromise', 'cACompromise', 'affiliationChanged',
+    'superseded', 'cessationOfOperation', 'certificateHold',
+    'privilegeWithdrawn', 'aACompromise'
+  ];
+  let highest = -1;
+  const bits = Buffer.alloc(2);
+  for (const name of names) {
+    const i = order.indexOf(name);
+    if (i < 0) continue;
+    bits[i >> 3] |= 0x80 >> (i & 7);
+    if (i > highest) highest = i;
+  }
+  const used = highest + 1;
+  const byteLen = Math.max(1, Math.ceil(used / 8));
+  const unused = byteLen * 8 - used;
+  return Buffer.concat([Buffer.from([unused]), bits.subarray(0, byteLen)]);
+}
+
 function generateCRL(issuerCA, revokedList = [], opts = {}) {
   const nextUpdateDays = opts.nextUpdateDays !== undefined ? opts.nextUpdateDays : getDefaults().crl.nextUpdateDays;
   const now  = opts.thisUpdate || new Date();
   const next = opts.nextUpdate || new Date(now.getTime() + nextUpdateDays * 86400000);
   const signAlgId = algId(issuerCA.keyType, issuerCA.hashAlg || 'sha256', issuerCA.curveName);
 
-  const revokedEntries = revokedList.map(r =>
-    SEQ(
-      INT(r.serial),
-      UTCTime(r.date || now),
-      // DÜZELTME: CTX(0) sarmalayıcısı kaldırıldı. Doğrudan SEQUENCE olmalı.
-      SEQ(SEQ(OID('551d15'), OCT(ENUM(r.reason || 0))))
-    )
-  );
+  const revokedEntries = revokedList.map(r => {
+    const entryExts = [SEQ(OID('551d15'), OCT(ENUM(r.reason || 0)))];   // reasonCode
+
+    // invalidityDate (2.5.29.24) — anahtarın gerçekte ne zaman geçersiz
+    // olduğunu söyler; revocationDate ise ne zaman YAYIMLANDIĞINI.
+    if (r.invalidityDate) {
+      entryExts.push(SEQ(OID('2.5.29.24'), OCT(GenTime(r.invalidityDate))));
+    }
+    // certificateIssuer (2.5.29.29) — DOLAYLI CRL'lerde girdinin sahibi
+    if (r.certificateIssuerName) {
+      entryExts.push(SEQ(
+        OID('2.5.29.29'), BOOL(true),
+        OCT(SEQ(CTX(4, r.certificateIssuerName)))));
+    }
+
+    return SEQ(INT(r.serial), UTCTime(r.date || now), SEQ(...entryExts));
+  });
+
+  const crlNumber = opts.crlNumber !== undefined
+    ? BigInt(opts.crlNumber) : (newSerial() & 0xffffn);
+
+  const crlExts = [
+    SEQ(OID(OIDs.crlNumber), OCT(INT(crlNumber))),
+    extAKID(issuerCA.skid)
+  ];
+
+  // deltaCRLIndicator (2.5.29.27) — KRİTİK olmak zorunda
+  if (opts.deltaBaseCrlNumber !== undefined) {
+    crlExts.push(SEQ(OID('2.5.29.27'), BOOL(true),
+      OCT(INT(BigInt(opts.deltaBaseCrlNumber)))));
+  }
+
+  // issuingDistributionPoint (2.5.29.28) — KRİTİK; CRL'in kapsamını daraltır
+  if (opts.idp) {
+    crlExts.push(SEQ(OID('2.5.29.28'), BOOL(true), OCT(buildIdp(opts.idp))));
+  }
+
+  // freshestCRL (2.5.29.46) — delta CRL'in nerede bulunacağı
+  if (opts.freshestCrlUrls && opts.freshestCrlUrls.length) {
+    crlExts.push(SEQ(OID('2.5.29.46'), OCT(SEQ(
+      SEQ(CTX(0, CTX(0, ...opts.freshestCrlUrls.map((u) => tlvIa5(u)))))))));
+  }
+
+  // Test amaçlı: tanınmayan KRİTİK uzantı — doğrulayıcı bunu reddetmeli
+  if (opts.unknownCriticalExtension) {
+    crlExts.push(SEQ(OID(opts.unknownCriticalExtension), BOOL(true), OCT(NULL())));
+  }
 
   const tbs = SEQ(
     intSmall(1),                           // version v2
@@ -431,10 +525,7 @@ function generateCRL(issuerCA, revokedList = [], opts = {}) {
     UTCTime(now),
     UTCTime(next),
     revokedEntries.length ? SEQ(...revokedEntries) : null,
-    CTX(0, SEQ(
-      SEQ(OID(OIDs.crlNumber), OCT(INT(newSerial() & 0xffffn))),
-      extAKID(issuerCA.skid),
-    ))
+    CTX(0, SEQ(...crlExts))
   );
 
   const sig    = _sign(tbs, { ...issuerCA });

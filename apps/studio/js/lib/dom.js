@@ -31,6 +31,29 @@ export function el(tag, attrs = null, children = null) {
   return node;
 }
 
+/**
+ * SVG elemanı oluşturur.
+ *
+ * SVG düğümleri XHTML ad alanında DEĞİLDİR; `createElement('path')` HTML
+ * bilinmeyen elemanı üretir ve hiçbir şey çizilmez. Bu yüzden ayrı bir
+ * kurucu gerekir. Öznitelikler burada da `setAttribute` ile yazılır —
+ * `innerHTML` yok, dizge birleştirme yok.
+ */
+export function svgEl(tag, attrs = null, children = null) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+
+  if (attrs) {
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value == null || value === false) continue;
+      if (key === 'style' && typeof value === 'object') Object.assign(node.style, value);
+      else node.setAttribute(key, String(value));
+    }
+  }
+
+  append(node, children);
+  return node;
+}
+
 export function append(parent, children) {
   if (children == null) return parent;
   const list = Array.isArray(children) ? children : [children];
