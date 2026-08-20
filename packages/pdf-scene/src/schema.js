@@ -101,6 +101,31 @@ const NODE_TYPES = {
     }
   },
 
+  /**
+   * Serbest yol (vektör çizim).
+   *
+   * NEDEN AYRI BİR TİP: dikdörtgen ve elips tek bir çerçeveyle anlatılabilir,
+   * bir logo anlatılamaz. PDF'ten içe aktarılan vektör çizimleri metne ya da
+   * görsele çevirmek bilgi kaybıdır: birincisi anlamsız, ikincisi ölçek
+   * bağımlıdır. Yol düğümü çizimi ÇİZİM olarak tutar.
+   *
+   * `d` KENDİ koordinat uzayındadır; derleyici veriden sınır kutusunu
+   * hesaplar ve çerçeveye oturtur. Böylece düğümü büyütmek çizimi büyütür ve
+   * saklanan ikinci bir "viewBox" ile çerçevenin ayrışma ihtimali kalmaz.
+   */
+  path: {
+    fields: {
+      d:           { type: 'pathData', required: true },
+      fill:        { type: 'color', optional: true },
+      stroke:      { type: 'color', optional: true },
+      strokeWidth: { type: 'length', default: 0, min: 0, max: 200 },
+      // PDF `f` (nonzero) ile `f*` (evenodd) farkı deliklerde görünür:
+      // yanlış kural, halkayı dolu daireye çevirir.
+      fillRule:    { type: 'enum', values: ['nonzero', 'evenodd'], default: 'nonzero' },
+      dash:        { type: 'enum', values: ['solid', 'dashed', 'dotted'], default: 'solid' }
+    }
+  },
+
   /** Görsel — varlık kimliğiyle. */
   image: {
     fields: {
@@ -184,6 +209,10 @@ const DEFAULT_ROLE = {
   rect: 'artifact',
   ellipse: 'artifact',
   line: 'artifact',
+  // Yol düğümü varsayılan olarak SÜSTÜR. İçe aktarılan bir belgede yüzlerce
+  // çizgi parçası olur; her birini "şekil" diye okutmak ekran okuyucuyu
+  // kullanılmaz hâle getirir. Anlam taşıyan çizim için rol elle verilir.
+  path: 'artifact',
   signature: 'artifact',
   group: 'artifact'
 };
@@ -221,7 +250,13 @@ const LIMITS = {
   maxDepth: 32,
   maxAssets: 512,
   maxRuns: 2000,
-  maxNameLength: 256
+  maxNameLength: 256,
+  /**
+   * Tek yoldaki komut sayısı. İçe aktarılan haritalar/logolar birkaç bin
+   * segment olabilir; sınırsız bırakmak, tek düğümle belleği tüketme yolu
+   * açardı.
+   */
+  maxPathCommands: 20_000
 };
 
 module.exports = {

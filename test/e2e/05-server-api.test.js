@@ -751,7 +751,7 @@ test('POST /api/scene/import/pdf PDF i sahneye çevirir', async () => {
   assert.strictEqual(node.text, 'Geri dönüş');
   assert.strictEqual(node.frame.x, 72);
   assert.strictEqual(node.frame.y, 144, 'gerçek font yükseltisiyle tur kapanmalı');
-  assert.ok(body.warnings.some((w) => w.code === 'WARN_IMPORT_TEXT_ONLY'));
+  assert.ok(body.warnings.some((w) => w.code === 'WARN_IMPORT_FLATTENED'));
 });
 
 test('GET /vendor/scene.esm.js tarayıcı paketini servis eder', async () => {

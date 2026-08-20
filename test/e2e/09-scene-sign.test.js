@@ -215,7 +215,7 @@ test('sahne → PDF → sahne turu koordinatları korur', () => {
   assert.strictEqual(nodes[1].text, 'İkinci kutu ÇĞİÖŞÜ');
 
   // İçe aktarmanın SINIRI açıkça bildirilir
-  assert.ok(warnings.some((w) => w.code === 'WARN_IMPORT_TEXT_ONLY'));
+  assert.ok(warnings.some((w) => w.code === 'WARN_IMPORT_FLATTENED'));
 });
 
 test('HTML → sahne → PDF → imza zinciri çalışır', async () => {

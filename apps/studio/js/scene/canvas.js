@@ -14,7 +14,7 @@
  * kullanıcı içeriği yalnız `textContent` ile yazılır.
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, svgEl, clear } from '../lib/dom.js';
 
 /** Boyutlandırma tutamaklarının yönleri. */
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -224,6 +224,25 @@ export class SceneCanvas {
           transformOrigin: '0 0'
         });
         box.appendChild(line);
+        break;
+      }
+
+      case 'path': {
+        // Yol SVG ile çizilir. `d` yalnız sayılardan kurulur; kullanıcı
+        // metni buraya hiç girmez.
+        const w = abs.width * this.zoom, h = abs.height * this.zoom;
+        const local = this.geometry.fitPath(node.d, { x: 0, y: 0, width: w, height: h });
+        const svg = svgEl('svg', {
+          class: 'sc-path', width: w, height: h,
+          viewBox: `0 0 ${round3(w)} ${round3(h)}`
+        }, [svgEl('path', {
+          d: svgPathData(local),
+          fill: node.fill || 'none',
+          'fill-rule': node.fillRule === 'evenodd' ? 'evenodd' : null,
+          stroke: node.stroke || 'none',
+          'stroke-width': node.strokeWidth ? node.strokeWidth * this.zoom : null
+        })]);
+        box.appendChild(svg);
         break;
       }
 
@@ -719,6 +738,31 @@ export class SceneCanvas {
 function cssFontFamily(family) {
   const clean = String(family || '').replace(/[^A-Za-z0-9 _-]/g, '').trim();
   return clean ? `"${clean}", sans-serif` : 'sans-serif';
+}
+
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/**
+ * Yol komutlarını SVG `d` dizgesine çevirir.
+ *
+ * Sahne ile SVG'nin koordinat yönü aynıdır (y aşağı). Şema `d` içinde
+ * yalnız sayı bulunmasını garanti eder; bu yüzden burada dizge kurmak
+ * güvenlidir.
+ */
+function svgPathData(d) {
+  const out = [];
+  for (const cmd of d || []) {
+    switch (cmd[0]) {
+      case 'M': out.push(`M${round3(cmd[1])} ${round3(cmd[2])}`); break;
+      case 'L': out.push(`L${round3(cmd[1])} ${round3(cmd[2])}`); break;
+      case 'C':
+        out.push(`C${round3(cmd[1])} ${round3(cmd[2])} ${round3(cmd[3])} ${round3(cmd[4])} ` +
+                 `${round3(cmd[5])} ${round3(cmd[6])}`);
+        break;
+      case 'Z': out.push('Z'); break;
+    }
+  }
+  return out.join(' ');
 }
 
 /** Düğümün görüntülenecek metni — koşular varsa birleştirilir. */

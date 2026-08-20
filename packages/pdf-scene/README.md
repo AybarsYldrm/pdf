@@ -42,6 +42,8 @@ const { pdf, manifest, warnings } = compileToPdf(scene, {
 
 - **Tek birim: punto.** Sayfa, çerçeve, font boyutu — hepsi pt.
 - **Başlangıç: sayfanın sol üstü.** PDF'in sol-altına çevirmek derleyicinin işi.
+- **Yol verisi düğümün kendi uzayındadır**; derleyici sınır kutusundan
+  çerçeveye oturtur.
 - **Varlıklar kimlikle anılır**, dosya yoluyla değil. Belge içeriği dosya
   sistemine dokunamaz.
 - **Metin metindir.** HTML değildir, HTML olarak yorumlanmaz.

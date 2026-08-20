@@ -114,6 +114,36 @@ function cssFontFamily(family) {
 /* Düğüm → eleman                                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Yol komutlarını SVG `d` dizgesine çevirir.
+ *
+ * Sahne ve SVG'nin koordinat yönü AYNIDIR (y aşağı), bu yüzden çevirme
+ * gerekmez — PDF tarafındaki `flipY` yalnız orada gereklidir.
+ */
+function svgPathData(d) {
+  const out = [];
+  for (const cmd of d) {
+    switch (cmd[0]) {
+      case 'M': out.push(`M${round3(cmd[1])} ${round3(cmd[2])}`); break;
+      case 'L': out.push(`L${round3(cmd[1])} ${round3(cmd[2])}`); break;
+      case 'C':
+        out.push(`C${round3(cmd[1])} ${round3(cmd[2])} ${round3(cmd[3])} ${round3(cmd[4])} ` +
+                 `${round3(cmd[5])} ${round3(cmd[6])}`);
+        break;
+      case 'Z': out.push('Z'); break;
+    }
+  }
+  return out.join(' ');
+}
+
+/** Kesik/noktalı çizgi deseni (SVG). */
+function dashArray(node) {
+  const w = node.strokeWidth || 1;
+  if (node.dash === 'dashed') return `${round3(w * 4)} ${round3(w * 3)}`;
+  if (node.dash === 'dotted') return `0 ${round3(w * 2)}`;
+  return undefined;
+}
+
 function nodeElement(node, ctx) {
   if (node.hidden) return null;
 
@@ -173,6 +203,26 @@ function nodeElement(node, ctx) {
           opacity: node.opacity !== 1 ? String(node.opacity) : undefined
         })
       });
+    }
+
+    case 'path': {
+      // Yol SVG ile çizilir: CSS'te eğri yoktur. `d` yalnız SAYILARDAN
+      // kurulur (şema doğrulaması bunu garanti eder), yani dizge
+      // birleştirmesi burada güvenlidir.
+      const local = geometry.fitPath(node.d, { x: 0, y: 0, width: f.width, height: f.height });
+      return el('svg', {
+        class: 'sn-path', 'data-id': node.id,
+        width: round3(f.width), height: round3(f.height),
+        viewBox: `0 0 ${round3(f.width)} ${round3(f.height)}`,
+        style: style({ ...base, overflow: 'visible' })
+      }, [el('path', {
+        d: svgPathData(local),
+        fill: node.fill || 'none',
+        'fill-rule': node.fillRule === 'evenodd' ? 'evenodd' : undefined,
+        stroke: node.stroke || 'none',
+        'stroke-width': node.strokeWidth ? round3(node.strokeWidth) : undefined,
+        'stroke-dasharray': dashArray(node)
+      })]);
     }
 
     case 'text': {

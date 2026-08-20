@@ -6,13 +6,18 @@
  * düzenlenebilir sahne düğümlerine çevirir. Metin, @fitfak/pdf-doc'un
  * konumlandırılmış çıkarıcısıyla alınır — yani gerçekten sayfadaki yerinden.
  *
+ * Vektör çizimler `path` düğümüne, görsel XObject'leri varlığa + `image`
+ * düğümüne çevrilir (bkz. pdfgraphics.js ve pdfimage.js).
+ *
  * NE YAPMAZ (ve bunu iddia etmez):
- *   - Vektör çizimleri (yol, eğri, dolgu) düğüme çevrilmez.
- *   - Görseller yalnız `pageAsImage` seçeneğiyle DEĞİL, hiç aktarılmaz;
- *     PDF'ten görsel çıkarmak ayrı bir iştir ve burada yapılmıyor.
  *   - Yazı tipi dosyaları çıkarılmaz; içe aktarılan metin, sahnenin
  *     yapılandırdığı font ailesiyle yeniden çizilir. Bu, satır genişliklerinin
  *     birebir aynı çıkmayabileceği anlamına gelir.
+ *   - Kırpma bölgeleri, gölgeleme (gradyan) ve desen dolguları aktarılmaz;
+ *     her biri ayrı uyarı üretir.
+ *   - JPEG 2000, JBIG2 ve CCITT ile kodlanmış görseller çözülmez.
+ *   - Metin, çizimlerin ÜSTÜNE konur. Kaynak belgede metnin üzerine çizilmiş
+ *     bir örtü varsa sıra değişir.
  *   - Var olan imzalar KORUNMAZ. Sahne yeni bir belge üretir; eski imzalar
  *     yeni belgeyi kapsamaz. İmzalı bir PDF'i düzenlemek isteyen
  *     @fitfak/pdf-doc'un ARTIMLI düzenleme yolunu kullanmalıdır.
@@ -24,6 +29,9 @@ const { Scene } = require('../scene');
 const { AssetManager } = require('../assets');
 const { round } = require('../units');
 const { SceneError } = require('../validate');
+const geometry = require('../geometry');
+const { collectGraphics, placeUnitSquare } = require('./pdfgraphics');
+const { extractImage } = require('./pdfimage');
 
 /** Aynı satır sayılma eşiği (punto). */
 const LINE_EPSILON = 1.5;
@@ -103,6 +111,11 @@ function importFromPdf(pdfBuffer, o = {}) {
     }
   }
 
+  // Düğüm bütçesi: bir harita ya da karmaşık bir grafik on binlerce yol
+  // içerebilir. Sahne sınırlarını aşmak yerine sınıra kadar alınır ve
+  // kalanın alınmadığı SÖYLENİR.
+  const budget = { left: o.maxNodes || 4000 };
+
   scene.transaction('PDF içe aktar', () => {
     for (let index = 0; index < pageCount; index++) {
       const geo = doc.getPageGeometry(index);
@@ -112,6 +125,16 @@ function importFromPdf(pdfBuffer, o = {}) {
 
       const pageId = index === 0 ? scene.pages[0].id : `pg${index + 1}`;
       if (index > 0) scene.addPage({ id: pageId, name: `Sayfa ${index + 1}` });
+
+      // ÇİZİMLER ÖNCE: metin, kaynak belgelerin ezici çoğunluğunda arka plan
+      // dolgularının ve logoların ÜSTÜNDEDİR. Çizim listesindeki gerçek
+      // sırayı korumak, metni ayrı bir çıkarıcıdan aldığımız için mümkün
+      // değil; bu yüzden kural açıkça seçilmiştir ve belgelenmiştir.
+      if (o.graphics !== false) {
+        addGraphics(doc, index, geo, scene, pageId, {
+          warnings, assets: scene.assets, budget
+        });
+      }
 
       let items;
       try {
@@ -163,12 +186,122 @@ function importFromPdf(pdfBuffer, o = {}) {
     });
   }
   warnings.push({
-    code: 'WARN_IMPORT_TEXT_ONLY',
-    message: 'Yalnız metin ve sayfa ölçüleri aktarıldı; vektör çizimler, ' +
-             'görseller ve gömülü fontlar aktarılmadı.'
+    code: 'WARN_IMPORT_FLATTENED',
+    message: o.graphics === false
+      ? 'Yalnız metin ve sayfa ölçüleri aktarıldı; çizimler istenmedi.'
+      : 'Metin, çizim ve görseller aktarıldı; gömülü fontlar aktarılmadı ve ' +
+        'metin artık akmaz — kutu büyüdükçe sonraki kutuyu itmez.'
   });
 
   return { scene, warnings };
+}
+
+/**
+ * Sayfanın vektör çizimlerini ve görsellerini sahneye ekler.
+ *
+ * @param {Object} doc PdfDocument
+ * @param {number} index sayfa sırası
+ * @param {Object} geo sayfa geometrisi
+ * @param {Scene} scene
+ * @param {string} pageId
+ * @param {{ warnings:Array, assets:AssetManager, budget:{left:number} }} ctx
+ */
+function addGraphics(doc, index, geo, scene, pageId, ctx) {
+  const { records, warnings } = collectGraphics(doc, index, geo);
+  for (const w of warnings) ctx.warnings.push({ ...w, page: index });
+
+  /** Aynı görsel akışı iki kez çözülmesin: PDF'ler logoyu her sayfada çağırır. */
+  const imageCache = new Map();
+  let dropped = 0;
+
+  for (const rec of records) {
+    if (ctx.budget.left <= 0) { dropped++; continue; }
+
+    if (rec.kind === 'path') {
+      const box = geometry.pathBounds(rec.d);
+      // Sıfır alanlı ve konturu olmayan yol görünmez: eklemek yalnız
+      // katman listesini şişirir.
+      if (!rec.stroke && (box.width < 0.01 || box.height < 0.01)) continue;
+      if (!rec.fill && !rec.stroke) continue;
+
+      // Veri düğümün KENDİ uzayına taşınır; çerçeve sınır kutusudur.
+      const local = rec.d.map((cmd) => {
+        const out = [cmd[0]];
+        for (let i = 1; i + 1 < cmd.length; i += 2) {
+          out.push(round(cmd[i] - box.x), round(cmd[i + 1] - box.y));
+        }
+        return out;
+      });
+
+      scene.addNode(Scene.createNode('path', {
+        x: box.x, y: box.y, width: box.width, height: box.height,
+        d: local,
+        fill: rec.fill || undefined,
+        stroke: rec.stroke || undefined,
+        strokeWidth: rec.stroke ? round(rec.strokeWidth) : 0,
+        fillRule: rec.fillRule,
+        dash: rec.dash,
+        opacity: rec.opacity === undefined ? 1 : round(rec.opacity)
+      }), { pageId });
+      ctx.budget.left--;
+      continue;
+    }
+
+    if (rec.kind !== 'image') continue;
+
+    const place = placeUnitSquare(rec.ctm);
+    if (place.width < 0.01 || place.height < 0.01) continue;
+    if (place.skewed) {
+      warnOnce(ctx.warnings, 'WARN_IMPORT_MATRIX_SKEW',
+        'Eğrilmiş (skew) matrisle yerleştirilmiş görseller dik çerçeveye oturtuldu.');
+    }
+    if (place.mirrored) {
+      warnOnce(ctx.warnings, 'WARN_IMPORT_MIRRORED',
+        'Aynalanmış görseller aynalanmadan yerleştirildi; sahne modelinde ' +
+        'yansıtma yoktur.');
+    }
+
+    let assetId = imageCache.get(rec.stream);
+    if (assetId === undefined) {
+      try {
+        const img = extractImage(doc, rec.stream);
+        const added = ctx.assets.add(img.bytes, { name: `gorsel-${index + 1}.${img.mime === 'image/jpeg' ? 'jpg' : 'png'}` });
+        assetId = added.id;
+        if (img.note) {
+          warnOnce(ctx.warnings, 'WARN_IMPORT_COLOR_APPROX',
+            `Bazı görsellerin rengi yaklaşık çevrildi (${img.note}).`);
+        }
+      } catch (err) {
+        assetId = null;
+        warnOnce(ctx.warnings, err.code === 'ERR_IMG_STENCIL'
+          ? 'WARN_IMPORT_STENCIL' : 'WARN_IMPORT_IMAGE_FAILED',
+          `Bir görsel aktarılamadı: ${err.message}`);
+      }
+      imageCache.set(rec.stream, assetId);
+    }
+    if (!assetId) continue;
+
+    scene.addNode(Scene.createNode('image', {
+      x: round(place.x), y: round(place.y),
+      width: round(place.width), height: round(place.height),
+      assetId, fit: 'fill',
+      rotation: round(place.rotation),
+      opacity: rec.opacity === undefined ? 1 : round(rec.opacity)
+    }), { pageId });
+    ctx.budget.left--;
+  }
+
+  if (dropped) {
+    ctx.warnings.push({
+      code: 'WARN_IMPORT_NODE_BUDGET', page: index,
+      message: `Sayfa ${index + 1}: düğüm bütçesi dolduğu için ${dropped} çizim alınmadı.`
+    });
+  }
+}
+
+/** Aynı uyarıyı yüzlerce kez üretmemek için. */
+function warnOnce(list, code, message) {
+  if (!list.some((w) => w.code === code)) list.push({ code, message });
 }
 
 const single = (it) => ({ x: it.x, baseline: it.baseline, width: it.width, text: it.text, fontSize: it.fontSize });

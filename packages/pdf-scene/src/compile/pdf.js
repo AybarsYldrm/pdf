@@ -115,6 +115,21 @@ function emitNode(node, abs, ctx, out) {
       return;
     }
 
+    case 'path': {
+      // Yol verisi KENDİ uzayındadır; çerçeveye burada oturtulur. Böylece
+      // düğümü büyütmek çizimi büyütür ve modelde saklanan ikinci bir
+      // ölçek alanı tutulmaz.
+      const d = geometry.fitPath(node.d, abs);
+      if (!d.length) return;
+      out.items.push({
+        type: 'path', d,
+        fill: node.fill, stroke: node.stroke,
+        strokeWidth: node.strokeWidth, fillRule: node.fillRule,
+        dash: node.dash, ...common
+      });
+      return;
+    }
+
     case 'text': {
       const res = textItems(node, { x: abs.x, y: abs.y }, ctx);
       for (const item of res.items) out.items.push({ ...item, ...common, opacity: node.opacity });
@@ -218,6 +233,37 @@ function emitNode(node, abs, ctx, out) {
  * Köşeler saat yönünün TERSİNE dolaşılır (PDF'in sol-alt başlangıcında
  * bu "pozitif" yöndür): sağ-alt → sağ-üst → sol-üst → sol-alt.
  */
+/**
+ * Sahne yol verisini PDF yol işleçlerine çevirir.
+ *
+ * Sahne y'si aşağı, PDF y'si yukarı büyür; her nokta `flipY`den geçer.
+ * Kapatılmamış alt yollar `h` almaz: PDF dolgu sırasında zaten kapatır ama
+ * konturda AÇIK yol ile KAPALI yol farklı görünür ve kaynaktaki fark
+ * korunmalıdır.
+ */
+function pathOps(d, flipY) {
+  const out = [];
+  for (const cmd of d) {
+    switch (cmd[0]) {
+      case 'M': out.push(`${fmt(cmd[1])} ${fmt(flipY(cmd[2]))} m`); break;
+      case 'L': out.push(`${fmt(cmd[1])} ${fmt(flipY(cmd[2]))} l`); break;
+      case 'C':
+        out.push(`${fmt(cmd[1])} ${fmt(flipY(cmd[2]))} ${fmt(cmd[3])} ${fmt(flipY(cmd[4]))} ` +
+                 `${fmt(cmd[5])} ${fmt(flipY(cmd[6]))} c`);
+        break;
+      case 'Z': out.push('h'); break;
+    }
+  }
+  return out.join('\n');
+}
+
+/** Kesik/noktalı çizgi deseni. Desen çizgi kalınlığına göre ölçeklenir. */
+function dashOps(parts, item) {
+  const w = item.strokeWidth || 1;
+  if (item.dash === 'dashed') parts.push(`[${fmt(w * 4)} ${fmt(w * 3)}] 0 d`);
+  else if (item.dash === 'dotted') parts.push(`[0 ${fmt(w * 2)}] 0 d 1 J`);
+}
+
 function roundedRectPath(x, y, w, h, r) {
   const k = 0.55228475 * r;
   const x0 = x, y0 = y, x1 = x + w, y1 = y + h;
@@ -310,15 +356,17 @@ function buildContent(items, pageHeight, refs) {
     switch (item.type) {
       case 'rect': {
         const y = flipY(item.y + item.height);
+        const op = paintOp(parts, item);
         if (item.radius > 0) parts.push(roundedRectPath(item.x, y, item.width, item.height, Math.min(item.radius, item.width / 2, item.height / 2)));
         else parts.push(`${fmt(item.x)} ${fmt(y)} ${fmt(item.width)} ${fmt(item.height)} re`);
-        parts.push(paintOp(parts, item));
+        parts.push(op);
         break;
       }
       case 'ellipse': {
         const y = flipY(item.y + item.height);
+        const op = paintOp(parts, item);
         parts.push(ellipsePath(item.x, y, item.width, item.height));
-        parts.push(paintOp(parts, item));
+        parts.push(op);
         break;
       }
       case 'line': {
@@ -328,6 +376,15 @@ function buildContent(items, pageHeight, refs) {
         if (item.dash === 'dashed') parts.push(`[${fmt(item.strokeWidth * 3)} ${fmt(item.strokeWidth * 2)}] 0 d`);
         else if (item.dash === 'dotted') parts.push(`[0 ${fmt(item.strokeWidth * 2)}] 0 d 1 J`);
         parts.push(`${fmt(item.x1)} ${fmt(flipY(item.y1))} m ${fmt(item.x2)} ${fmt(flipY(item.y2))} l S`);
+        break;
+      }
+      case 'path': {
+        const op = paintOp(parts, item);
+        parts.push(pathOps(item.d, flipY));
+        // Dolgu kuralı: `f`/`B` sıfır olmayan sarım, `f*`/`B*` tek-çift.
+        // Yanlış kural halkayı dolu daireye çevirir; PDF'ten okunan bilgi
+        // korunmalıdır.
+        parts.push(item.fillRule === 'evenodd' && op !== 'S' ? `${op}*` : op);
         break;
       }
       case 'image': {
@@ -360,20 +417,28 @@ function buildContent(items, pageHeight, refs) {
   return { content: parts.join('\n'), usedFonts, usedImages };
 }
 
-/** Dolgu/kontur işlecini seçer ve gerekli renk komutlarını yazar. */
+/**
+ * Boyama stilini yazar ve kullanılacak boyama işlecini döndürür.
+ *
+ * ÇAĞRI SIRASI ÖNEMLİDİR: renk ve çizgi genişliği YOL KURULMADAN ÖNCE
+ * yazılmalıdır. PDF'te bir yol nesnesi (`m`/`re`den boyama işlecine kadar)
+ * yalnız yol kurma işleçleri kabul eder; araya `rg` sıkıştırmak katı
+ * ayrıştırıcılarda ve uyumluluk denetleyicilerinde hatadır.
+ */
 function paintOp(parts, item) {
   if (item.fill && item.stroke) {
     const f = rgb(item.fill), s = rgb(item.stroke);
     parts.push(`${fmt(f[0])} ${fmt(f[1])} ${fmt(f[2])} rg`);
     parts.push(`${fmt(s[0])} ${fmt(s[1])} ${fmt(s[2])} RG`);
     parts.push(`${fmt(item.strokeWidth || 1)} w`);
+    dashOps(parts, item);
     return 'B';
   }
   if (item.stroke) {
     const s = rgb(item.stroke);
     parts.push(`${fmt(s[0])} ${fmt(s[1])} ${fmt(s[2])} RG`);
     parts.push(`${fmt(item.strokeWidth || 1)} w`);
-    if (item.dash === 'dashed') parts.push(`[${fmt((item.strokeWidth || 1) * 4)} ${fmt((item.strokeWidth || 1) * 3)}] 0 d`);
+    dashOps(parts, item);
     return 'S';
   }
   const f = rgb(item.fill || '#000000');

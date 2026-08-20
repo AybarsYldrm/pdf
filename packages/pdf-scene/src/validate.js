@@ -113,6 +113,7 @@ class Validator {
       }
       case 'assetRef':  return this.assetRef(path, raw);
       case 'runs':      return this.runs(path, raw);
+      case 'pathData':  return this.pathData(path, raw);
       default:          return this.fail(path, 'ERR_SCHEMA', `Bilinmeyen alan tipi: ${spec.type}`);
     }
   }
@@ -187,6 +188,67 @@ class Validator {
       }
       out.push(entry);
     });
+    return out;
+  }
+
+  /**
+   * Yol verisi: `[['M',x,y], ['L',x,y], ['C',x1,y1,x2,y2,x,y], ['Z']]`.
+   *
+   * NEDEN DİZİ, NEDEN SVG DİZGESİ DEĞİL: dizge tutmak bir ayrıştırıcı daha
+   * yazmak demektir ve güvenilmez girdiyi ayrıştıran her yeni kod yeni bir
+   * yüzeydir. Dizi biçimi JSON'un kendi ayrıştırıcısıyla gelir; burada
+   * yalnız komut adı, argüman sayısı ve sayı aralığı denetlenir.
+   *
+   * Tek eğri tipi kübiktir (`C`). PDF'in `v`/`y` işleçleri ve yay komutları
+   * içe aktarmada kübiğe çevrilir: TEK gösterim, tek çizim yolu.
+   */
+  pathData(path, raw) {
+    if (!Array.isArray(raw)) return this.fail(path, 'ERR_TYPE', 'Dizi bekleniyordu');
+    if (!raw.length) return this.fail(path, 'ERR_PATH_EMPTY', 'Yol en az bir komut içermeli');
+    if (raw.length > this.limits.maxPathCommands) {
+      return this.fail(path, 'ERR_TOO_MANY',
+        `Yolda en çok ${this.limits.maxPathCommands} komut olabilir (gelen ${raw.length})`);
+    }
+
+    const ARITY = { M: 2, L: 2, C: 6, Z: 0 };
+    const out = [];
+
+    for (let i = 0; i < raw.length; i++) {
+      const cmd = raw[i];
+      const p = `${path}[${i}]`;
+      if (!Array.isArray(cmd) || !cmd.length) {
+        return this.fail(p, 'ERR_TYPE', 'Komut dizisi bekleniyordu');
+      }
+      const op = cmd[0];
+      const arity = ARITY[op];
+      if (arity === undefined) {
+        return this.fail(`${p}[0]`, 'ERR_PATH_OP',
+          `Bilinmeyen yol komutu: ${JSON.stringify(op)} (M, L, C, Z)`);
+      }
+      if (cmd.length - 1 !== arity) {
+        return this.fail(p, 'ERR_PATH_ARITY',
+          `${op} komutu ${arity} sayı ister (gelen ${cmd.length - 1})`);
+      }
+
+      const entry = [op];
+      for (let a = 1; a <= arity; a++) {
+        const n = Number(cmd[a]);
+        if (!Number.isFinite(n)) {
+          return this.fail(`${p}[${a}]`, 'ERR_TYPE', 'Sonlu sayı bekleniyordu');
+        }
+        if (Math.abs(n) > 100_000) {
+          return this.fail(`${p}[${a}]`, 'ERR_RANGE', `Koordinat aralık dışı: ${n}`);
+        }
+        entry.push(units.round(n));
+      }
+      out.push(entry);
+    }
+
+    // İlk komut yerleşim komutu olmalı: nereden başladığı belli olmayan bir
+    // yol, çizerin durumuna bağlı olur ve tur kapanmaz.
+    if (out[0][0] !== 'M') {
+      return this.fail(`${path}[0]`, 'ERR_PATH_START', 'Yol M komutuyla başlamalı');
+    }
     return out;
   }
 

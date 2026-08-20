@@ -81,6 +81,7 @@ Her düğümde ortak alanlar: `id`, `type`, `name`, `frame {x,y,width,height}`,
 | `rect` | `fill`, `stroke`, `strokeWidth`, `radius` |
 | `ellipse` | `fill`, `stroke`, `strokeWidth` |
 | `line` | `stroke`, `strokeWidth`, `dash` — çerçevenin köşegeni üzerinde tanımlıdır |
+| `path` | `d` (`[['M',x,y],['L',x,y],['C',…],['Z']]`), `fill`, `stroke`, `strokeWidth`, `fillRule`, `dash` |
 | `image` | `assetId`, `fit` (contain/cover/fill) |
 | `qr` | `payload`, `ecc`, `quiet`, `dark`, `light` |
 | `signature` | `fieldName`, `signer`, `signerTitle`, `label`, `showFrame` |
@@ -195,6 +196,12 @@ kendi içerik akışı kurulur:
 `signatureSlots` — `@fitfak/pdf-html` manifestiyle aynı. İmzalama tarafı
 belgenin sahneden mi HTML'den mi geldiğini bilmek zorunda değildir.
 
+**Vektör yollar** `path` düğümünde taşınır. `d` düğümün KENDİ uzayındadır;
+derleyici veriden sınır kutusunu hesaplar ve çerçeveye oturtur — böylece
+düğümü büyütmek çizimi büyütür ve saklanan ikinci bir ölçek alanıyla
+çerçevenin ayrışma ihtimali kalmaz. Tek eğri tipi kübiktir; PDF'in `v`/`y`
+işleçleri içe aktarmada kübiğe çevrilir.
+
 ### Scene → HTML (önizleme)
 
 **Bu çıktı gerçeğin kaynağı değildir.** PDF sahneden doğrudan üretilir;
@@ -220,9 +227,22 @@ parçasına ayrı düğüm vermek teknik olarak doğru ama kullanışsız olurdu
 
 ### PDF → Sahne
 
-`@fitfak/pdf-doc`'un konumlandırılmış metin çıkarıcısı kullanılır. Font
-verilirse taban çizgisi → kutu üstü dönüşümü **gerçek yükseltiyle** yapılır
-ve sahne → PDF → sahne turu birebir kapanır.
+Üç kaynak birleştirilir:
+
+1. **Metin** — `@fitfak/pdf-doc`'un konumlandırılmış çıkarıcısı. Font
+   verilirse taban çizgisi → kutu üstü dönüşümü **gerçek yükseltiyle**
+   yapılır ve sahne → PDF → sahne turu birebir kapanır.
+2. **Vektör çizimler** — içerik akışı yürütülür (`q/Q`, `cm`, renk
+   işleçleri, `m/l/c/v/y/h/re` + `f/S/B` aileleri) ve her boyama bir `path`
+   düğümüne çevrilir. Form XObject'lerin içine girilir (derinlik sınırlı,
+   döngüye karşı korumalı).
+3. **Görseller** — görsel XObject'leri varlığa çevrilir: JPEG baytları
+   olduğu gibi alınır, Flate ile sıkıştırılmış örnekler PNG'ye kayıpsız
+   yeniden kodlanır, `/SMask` alfa kanalına katılır.
+
+Sayfa matrisi üç şeyi birlikte çözer: y ekseninin yönü, kırpma kutusu
+kayması ve `/Rotate`. Böylece içe aktarılan sahne **kullanıcının gördüğü**
+yerleşimdir, ham kullanıcı uzayı değil.
 
 ---
 
@@ -319,11 +339,21 @@ Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
   sahnede yoktur. İçe aktarılan belge düzenlenebilir ama artık akmaz: metin
   uzayınca sonraki kutuyu itmez. Uyarı olarak bildirilir
   (`WARN_IMPORT_FLATTENED`).
-- **PDF içe aktarma yalnız metindir.** Vektör çizimler, görseller ve gömülü
-  fontlar aktarılmaz (`WARN_IMPORT_TEXT_ONLY`). İmzalı bir belgeyi içe
+- **PDF içe aktarmada gömülü fontlar aktarılmaz.** Metin, sahnenin
+  yapılandırdığı aileyle yeniden çizilir; satır genişlikleri birebir aynı
+  olmayabilir. Kırpma bölgeleri (`WARN_IMPORT_CLIP`), gradyanlar
+  (`WARN_IMPORT_SHADING`), desen dolguları (`WARN_IMPORT_PATTERN`),
+  aynalanmış görseller (`WARN_IMPORT_MIRRORED`) ve JPEG 2000/JBIG2/CCITT
+  görseller (`WARN_IMPORT_IMAGE_FAILED`) aktarılmaz. İmzalı bir belgeyi içe
   aktarmak yeni bir belge üretir; eski imzalar taşınmaz
   (`WARN_SIGNATURES_DROPPED`). İmzalı belgeyi düzenlemek isteyen
   `@fitfak/pdf-doc`'un artımlı yolunu kullanmalıdır.
+- **İçe aktarmada metin çizimlerin ÜSTÜNE konur.** Metin ayrı bir
+  çıkarıcıdan geldiği için gerçek katman sırası korunamaz; belgelerin ezici
+  çoğunluğunda doğru olan varsayım seçilmiştir.
+- **İçe aktarmada düğüm bütçesi vardır** (varsayılan 4000/belge). Karmaşık
+  bir grafik on binlerce yol içerebilir; sınıra kadar alınır ve kalanın
+  alınmadığı `WARN_IMPORT_NODE_BUDGET` ile söylenir.
 - **Sahne tek sayfa boyutu taşır.** Kaynak belgede sayfalar farklı
   boyutluysa ilk sayfanınki kullanılır (`WARN_PAGE_SIZE_MISMATCH`).
 - **Metin kutuya sığmazsa kırpılmaz, uyarılır** (`WARN_TEXT_OVERFLOW`).

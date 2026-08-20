@@ -168,6 +168,62 @@ function absoluteFrame(ancestry) {
   };
 }
 
+/**
+ * Yol verisinin sınır kutusu.
+ *
+ * Kübik eğrilerde DENETİM noktaları da hesaba katılır. Gerçek eğri denetim
+ * noktalarının dışına çıkamaz; kutu bu yüzden bazen gereğinden geniştir ama
+ * ASLA dar değildir. Dar bir kutu, çizimin kenardan kırpılması demektir —
+ * geniş kutu yalnız birkaç puntoluk boşluktur.
+ *
+ * @param {Array<Array>} d `[['M',x,y], …]`
+ * @returns {{x:number,y:number,width:number,height:number}}
+ */
+function pathBounds(d) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+  for (const cmd of d || []) {
+    for (let i = 1; i + 1 < cmd.length; i += 2) {
+      const x = cmd[i], y = cmd[i + 1];
+      if (typeof x !== 'number' || typeof y !== 'number') continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 0, height: 0 };
+  return {
+    x: round(minX), y: round(minY),
+    width: round(maxX - minX), height: round(maxY - minY)
+  };
+}
+
+/**
+ * Yolu kendi sınır kutusundan verilen çerçeveye oturtur.
+ *
+ * Sıfır genişlikli kutu (dikey çizgi) bölme hatası üretmesin diye ölçek 1
+ * kalır ve yalnız kaydırma uygulanır.
+ *
+ * @returns {Array<Array>} dönüştürülmüş komutlar
+ */
+function fitPath(d, frame) {
+  const box = pathBounds(d);
+  const sx = box.width > 0.0001 ? frame.width / box.width : 1;
+  const sy = box.height > 0.0001 ? frame.height / box.height : 1;
+
+  return (d || []).map((cmd) => {
+    const out = [cmd[0]];
+    for (let i = 1; i + 1 < cmd.length; i += 2) {
+      if (typeof cmd[i] !== 'number') break;
+      out.push(round(frame.x + (cmd[i] - box.x) * sx));
+      out.push(round(frame.y + (cmd[i + 1] - box.y) * sy));
+    }
+    return out;
+  });
+}
+
 /** Bir düğüm listesinin toplam sınır kutusu (dönme dâhil). */
 function boundsOf(nodes) {
   let out = null;
@@ -327,7 +383,7 @@ const snapToGrid = (value, step) =>
 module.exports = {
   IDENTITY, multiply, translate, scale, rotate, apply, invert,
   rect, center, union, intersects, contains, containsPoint, rotatedBounds,
-  absoluteFrame, boundsOf,
+  absoluteFrame, boundsOf, pathBounds, fitPath,
   ALIGNMENTS, align, distribute,
   snap, snapToGrid
 };

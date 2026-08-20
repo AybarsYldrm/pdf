@@ -48,6 +48,13 @@ const FIELDS = {
     { key: 'fit', label: 'Oturtma', kind: 'enum', values: ['contain', 'cover', 'fill'] }
     // `alt` her düğümde ortaktır; erişilebilirlik bölümünde düzenlenir.
   ],
+  path: [
+    { key: 'fill', label: 'Dolgu', kind: 'color' },
+    { key: 'stroke', label: 'Çizgi', kind: 'color' },
+    { key: 'strokeWidth', label: 'Çizgi kalınlığı', kind: 'number', min: 0, max: 40, step: 0.5 },
+    { key: 'fillRule', label: 'Dolgu kuralı', kind: 'enum', values: ['nonzero', 'evenodd'] },
+    { key: 'dash', label: 'Biçim', kind: 'enum', values: ['solid', 'dashed', 'dotted'] }
+  ],
   qr: [
     { key: 'payload', label: 'İçerik', kind: 'textarea' },
     { key: 'ecc', label: 'Hata düzeltme', kind: 'enum', values: ['L', 'M', 'Q', 'H'] },
@@ -65,7 +72,8 @@ const FIELDS = {
 
 const TYPE_LABELS = {
   text: 'Metin', rect: 'Dikdörtgen', ellipse: 'Elips', line: 'Çizgi',
-  image: 'Görsel', qr: 'Karekod', signature: 'İmza yuvası', group: 'Grup'
+  image: 'Görsel', qr: 'Karekod', signature: 'İmza yuvası', group: 'Grup',
+  path: 'Vektör çizim'
 };
 
 
