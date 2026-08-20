@@ -36,6 +36,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { assertImageWithinLimits } = require('@fitfak/pdf/src/media/imageinfo');
 
 class AssetError extends Error {
   constructor(code, message) {
@@ -45,9 +46,17 @@ class AssetError extends Error {
   }
 }
 
-/** Varsayılan boyut sınırları (DoS'a karşı). */
+/**
+ * Varsayılan boyut sınırları (DoS'a karşı).
+ *
+ * `maxImagePixels` ayrı durur ve BAYT sınırından bağımsızdır: 40 KB'lık bir
+ * PNG, başlığında 20 000 × 20 000 bildirebilir ve çözüldüğünde 1,6 GB tutar.
+ * Bayt sınırı bunu yakalayamaz (bkz. media/imageinfo.js).
+ */
 const DEFAULT_LIMITS = {
   maxImageBytes: 16 * 1024 * 1024,
+  maxImagePixels: 50_000_000,
+  maxImageDecodedBytes: 512 * 1024 * 1024,
   maxFontBytes: 8 * 1024 * 1024,
   maxAssets: 256
 };
@@ -94,14 +103,17 @@ function looksAbsolute(value) {
 class AssetResolver {
   /**
    * @param {{ roots?: string[], allowAbsolute?: boolean, allowRemote?: boolean,
-   *           allowData?: boolean, limits?: Object }} [options]
+   *           allowData?: boolean, limits?: Object, remote?: Object }} [options]
    *        `roots` boşsa HİÇBİR dosya okunamaz (yalnız `data:` ve Buffer).
+   *        `remote` uzak getiriciye geçer: `allowHosts`, `denyHosts`,
+   *        `maxBytes`, `timeoutMs`, `maxRedirects`.
    */
   constructor(options = {}) {
     this.limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
     this.allowAbsolute = options.allowAbsolute === true;
     this.allowRemote = options.allowRemote === true;
     this.allowData = options.allowData !== false;
+    this.remoteOptions = options.remote || {};
 
     this.roots = [];
     for (const root of options.roots || []) {
@@ -116,8 +128,66 @@ class AssetResolver {
 
     /** Okunan varlıklar — tekrar okumayı ve sayaç aşımını önler. */
     this.cache = new Map();
+    /** Önceden indirilmiş uzak kaynaklar: url → { data } ya da { error }. */
+    this.remoteCache = new Map();
     /** Reddedilen erişimler; çağıran raporlayabilsin diye tutulur. */
     this.rejections = [];
+  }
+
+  /**
+   * Uzak kaynakları ÖNCEDEN, paralel olarak indirir.
+   *
+   * Hatalar fırlatılmaz, önbelleğe yazılır: bir görselin indirilememesi
+   * bütün belgeyi düşürmemeli, o görselin yerinde bir uyarı bırakmalıdır.
+   *
+   * @param {Iterable<string>} urls
+   * @returns {Promise<{ fetched: number, failed: number }>}
+   */
+  async prefetch(urls) {
+    const unique = [...new Set([...urls].filter((u) => /^https?:\/\//i.test(String(u))))];
+    if (!unique.length) return { fetched: 0, failed: 0 };
+
+    if (!this.allowRemote) {
+      for (const url of unique) {
+        this.remoteCache.set(url, {
+          error: new AssetError('ERR_ASSET_REMOTE',
+            `Uzak kaynak yükleme kapalı (SSRF koruması): ${url.slice(0, 80)}`)
+        });
+      }
+      return { fetched: 0, failed: unique.length };
+    }
+
+    const { fetchRemoteAsset } = require('./remote');
+    const budget = this.remoteOptions.maxRemote || 32;
+    let fetched = 0;
+    let failed = 0;
+
+    await Promise.all(unique.slice(0, budget).map(async (url) => {
+      if (this.remoteCache.has(url)) return;
+      try {
+        const result = await fetchRemoteAsset(url, {
+          maxBytes: this.limits.maxImageBytes,
+          ...this.remoteOptions
+        });
+        this.remoteCache.set(url, { data: result.data, contentType: result.contentType });
+        fetched++;
+      } catch (err) {
+        this.remoteCache.set(url, {
+          error: new AssetError(err.code || 'ERR_ASSET_REMOTE', err.message)
+        });
+        failed++;
+      }
+    }));
+
+    for (const url of unique.slice(budget)) {
+      this.remoteCache.set(url, {
+        error: new AssetError('ERR_ASSET_TOO_MANY',
+          `Uzak kaynak sayısı sınırı aşıldı (${budget})`)
+      });
+      failed++;
+    }
+
+    return { fetched, failed };
   }
 
   /** Kaynağın kum havuzu içinde olup olmadığını söyler (okumadan). */
@@ -211,8 +281,10 @@ class AssetResolver {
     const maxBytes = kind === 'font' ? this.limits.maxFontBytes : this.limits.maxImageBytes;
 
     // 1) Doğrudan bayt — en güvenli yol, hiç dosya sistemine dokunulmaz
-    if (Buffer.isBuffer(src)) return this.accept(src, 'buffer', null, maxBytes);
-    if (src instanceof Uint8Array) return this.accept(Buffer.from(src), 'buffer', null, maxBytes);
+    if (Buffer.isBuffer(src)) return this.accept(src, 'buffer', null, maxBytes, kind);
+    if (src instanceof Uint8Array) {
+      return this.accept(Buffer.from(src), 'buffer', null, maxBytes, kind);
+    }
 
     const raw = String(src == null ? '' : src).trim();
 
@@ -221,7 +293,7 @@ class AssetResolver {
       if (!this.allowData) {
         throw new AssetError('ERR_ASSET_DATA_DISABLED', 'data: URL kapalı');
       }
-      return this.accept(decodeDataUrl(raw), 'data', null, maxBytes);
+      return this.accept(decodeDataUrl(raw), 'data', null, maxBytes, kind);
     }
 
     // 3) Uzak kaynak — varsayılan olarak KAPALI (SSRF).
@@ -232,8 +304,23 @@ class AssetResolver {
         throw new AssetError('ERR_ASSET_SCHEME',
           `file: şemasına izin verilmiyor: ${raw.slice(0, 80)}`);
       }
-      throw new AssetError('ERR_ASSET_REMOTE',
-        `Uzak kaynak yükleme kapalı (SSRF koruması): ${raw.slice(0, 80)}`);
+      if (!this.allowRemote) {
+        throw new AssetError('ERR_ASSET_REMOTE',
+          `Uzak kaynak yükleme kapalı (SSRF koruması): ${raw.slice(0, 80)}`);
+      }
+
+      // Uzak kaynaklar ÖNCEDEN indirilir (`prefetch`). Bunun sebebi
+      // `read()`in eşzamanlı olması değil sadece; yerleşim motorunun
+      // ortasında ağ beklemek, tek bir yavaş sunucunun bütün derlemeyi
+      // kilitlemesi demektir. Önceden indirmek hepsini paralel yapar ve
+      // hatayı yerleşim başlamadan bildirir.
+      const fetched = this.remoteCache.get(raw);
+      if (!fetched) {
+        throw new AssetError('ERR_ASSET_REMOTE_NOT_PREFETCHED',
+          `Uzak kaynak önceden indirilmemiş: ${raw.slice(0, 80)}`);
+      }
+      if (fetched.error) throw fetched.error;
+      return this.accept(fetched.data, 'remote', null, maxBytes, kind);
     }
 
     // 4) Kum havuzu içinde dosya
@@ -252,17 +339,37 @@ class AssetResolver {
         `Varlık çok büyük: ${stat.size} bayt (sınır ${maxBytes})`);
     }
 
-    const result = this.accept(fs.readFileSync(file), 'file', file, maxBytes);
+    const result = this.accept(fs.readFileSync(file), 'file', file, maxBytes, kind);
     this.cache.set(raw, result);
     return result;
   }
 
-  accept(data, source, file, maxBytes) {
+  /**
+   * Baytları kabul eder — bayt sınırı VE (görsellerde) piksel sınırı.
+   *
+   * Piksel denetimi burada yapılır çünkü burası, baytların ayrıştırıcıya
+   * gitmeden önce geçtiği SON noktadır. Denetimi çağırana bırakmak,
+   * çağıranlardan birinin unutması demektir.
+   */
+  accept(data, source, file, maxBytes, kind = 'image') {
     if (data.length > maxBytes) {
       throw new AssetError('ERR_ASSET_TOO_LARGE',
         `Varlık çok büyük: ${data.length} bayt (sınır ${maxBytes})`);
     }
-    return { data, source, path: file };
+
+    let info = null;
+    if (kind === 'image') {
+      try {
+        info = assertImageWithinLimits(data, {
+          maxPixels: this.limits.maxImagePixels,
+          maxDecodedBytes: this.limits.maxImageDecodedBytes
+        });
+      } catch (err) {
+        throw new AssetError(err.code || 'ERR_IMAGE_INVALID', err.message);
+      }
+    }
+
+    return { data, source, path: file, info };
   }
 
   /** Reddedilen erişimi kaydeder (uyarı listesine dönüştürmek için). */

@@ -56,18 +56,56 @@ class Buffer extends Uint8Array {
     return out;
   }
 
-  toString(encoding) {
+  /**
+   * @param {string} [encoding]
+   * @param {number} [start]
+   * @param {number} [end]
+   *
+   * Aralık desteği şart: font tabloları \`buf.toString('latin1', o, o + 4)\`
+   * gibi çağrılarla okunur.
+   */
+  toString(encoding, start, end) {
+    const view = (start !== undefined || end !== undefined)
+      ? this.subarray(start || 0, end === undefined ? this.length : end)
+      : this;
+
     if (encoding === 'base64') {
       let bin = '';
-      for (let i = 0; i < this.length; i++) bin += String.fromCharCode(this[i]);
+      for (let i = 0; i < view.length; i++) bin += String.fromCharCode(view[i]);
       return btoa(bin);
     }
     if (encoding === 'hex') {
       let hex = '';
-      for (let i = 0; i < this.length; i++) hex += this[i].toString(16).padStart(2, '0');
+      for (let i = 0; i < view.length; i++) hex += view[i].toString(16).padStart(2, '0');
       return hex;
     }
-    return new TextDecoder().decode(this);
+    if (encoding === 'latin1' || encoding === 'binary' || encoding === 'ascii') {
+      let out = '';
+      for (let i = 0; i < view.length; i++) out += String.fromCharCode(view[i]);
+      return out;
+    }
+    if (encoding === 'utf16le' || encoding === 'ucs2' || encoding === 'ucs-2') {
+      let out = '';
+      for (let i = 0; i + 1 < view.length; i += 2) {
+        out += String.fromCharCode(view[i] | (view[i + 1] << 8));
+      }
+      return out;
+    }
+    return new TextDecoder().decode(view);
+  }
+
+  /** Bayt çiftlerini yerinde çevirir (UTF-16BE → UTF-16LE). */
+  swap16() {
+    for (let i = 0; i + 1 < this.length; i += 2) {
+      const t = this[i]; this[i] = this[i + 1]; this[i + 1] = t;
+    }
+    return this;
+  }
+
+  write(text, offset = 0, encoding = 'utf8') {
+    const bytes = Buffer.from(text, encoding);
+    this.set(bytes.subarray(0, this.length - offset), offset);
+    return bytes.length;
   }
 
   equals(other) {

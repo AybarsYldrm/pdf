@@ -25,6 +25,32 @@ const { SHIM_SOURCE } = require('./src/browser/shim');
 /** Bağımlılık sırasına göre — sonrakiler öncekilere gönderebilir. */
 const MODULES = ['units', 'schema', 'validate', 'geometry', 'history', 'assets', 'scene'];
 
+/**
+ * Paket dışından alınan SAF modüller.
+ *
+ * Yalnız Node API'si kullanmayan, tek başına duran dosyalar buraya girebilir.
+ * Amaç kopyalamayı önlemektir: görsel başlığını iki yerde okumak, iki yerin
+ * farklı sayı bulmasıyla biter. Anahtar, kaynaktaki `require()` yoluyla
+ * BİREBİR aynı olmalıdır.
+ */
+const EXTERNAL = {
+  '@fitfak/pdf/src/media/imageinfo':
+    path.join(__dirname, '..', 'pdf', 'src', 'media', 'imageinfo.js'),
+  '@fitfak/pdf/src/fonts/FontInfo':
+    path.join(__dirname, '..', 'pdf', 'src', 'fonts', 'FontInfo.js')
+};
+
+/**
+ * Dış modüllerden DOĞRUDAN dışa açılan üyeler.
+ *
+ * Editörün, yüklenen bir fontun aile adını sunucuyla AYNI şekilde okuması
+ * gerekir; yoksa tuvalde "Ubuntu" yazan bir düğüm sunucuda bulunamaz.
+ */
+const EXTERNAL_EXPORTS = {
+  '@fitfak/pdf/src/fonts/FontInfo': ['readFontInfo'],
+  '@fitfak/pdf/src/media/imageinfo': ['inspectImage']
+};
+
 /** Paketten dışa açılan adlar. */
 const EXPORTS = {
   './scene': ['Scene', 'makeId'],
@@ -73,6 +99,11 @@ function __require(id) {
 function __define(id, factory) { __defs[id] = factory; }
 `);
 
+  for (const [id, file] of Object.entries(EXTERNAL)) {
+    const source = fs.readFileSync(file, 'utf8');
+    parts.push(`__define(${JSON.stringify(id)}, function (module, exports, require) {\n${source}\n});`);
+  }
+
   for (const name of MODULES) {
     const source = readModule(name);
     parts.push(`__define('./${name}', function (module, exports, require) {\n${source}\n});`);
@@ -86,6 +117,11 @@ function __define(id, factory) { __defs[id] = factory; }
   }
   for (const [alias, id] of Object.entries(NAMESPACES)) {
     parts.push(`export const ${alias} = __require('${id}');`);
+  }
+  for (const [id, names] of Object.entries(EXTERNAL_EXPORTS)) {
+    const varName = '__x' + id.replace(/[^a-z]/gi, '');
+    parts.push(`const ${varName} = __require(${JSON.stringify(id)});`);
+    for (const n of names) parts.push(`export const ${n} = ${varName}.${n};`);
   }
 
   return parts.join('\n') + '\n';

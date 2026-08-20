@@ -44,6 +44,8 @@ export class SceneCanvas {
     this.gridStep = 0;          // 0 = ızgara kapalı
     this.snapEnabled = true;
     this.assetUrls = new Map();  // assetId → object URL
+    /** Belgeye gömülmüş font aileleri (kullanıcının yüklediği). */
+    this.embeddedFontFamilies = new Set();
 
     this.onSelectionChange = () => {};
     this.onChange = () => {};
@@ -228,6 +230,8 @@ export class SceneCanvas {
       case 'text': {
         const inner = el('div', { class: 'sc-text' });
         Object.assign(inner.style, {
+          // Aile adı doğrudan CSS'e girmez; süzülüp tırnaklanır.
+          fontFamily: cssFontFamily(node.fontFamily),
           fontSize: `${node.fontSize * this.zoom}px`,
           lineHeight: String(node.lineHeight),
           color: node.color,
@@ -701,6 +705,18 @@ export class SceneCanvas {
     this.onSelectionChange();
     this.onChange();
   }
+}
+
+/**
+ * Font ailesini CSS'e güvenli biçimde koyar.
+ *
+ * `style.fontFamily`e ham dizge yazmak, tırnak kapatıp yeni bildirim açmaya
+ * izin verir. Harf, rakam, boşluk, tire ve alt çizgi dışındaki her şey atılır.
+ * (Aynı kural sunucudaki HTML derleyicisinde de uygulanır.)
+ */
+function cssFontFamily(family) {
+  const clean = String(family || '').replace(/[^A-Za-z0-9 _-]/g, '').trim();
+  return clean ? `"${clean}", sans-serif` : 'sans-serif';
 }
 
 /** Düğümün görüntülenecek metni — koşular varsa birleştirilir. */

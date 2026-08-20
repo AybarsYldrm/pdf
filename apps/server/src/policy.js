@@ -43,9 +43,13 @@ const LIMITS = {
   maxCssBytes: num('MAX_CSS_BYTES', 2 * 1024 * 1024),
   maxTextBytes: num('MAX_TEXT_BYTES', 1024 * 1024),
 
-  /* Varlıklar */
+  /* Varlıklar
+   * `maxImagePixels` bayt sınırından BAĞIMSIZ olmak zorundadır: 40 KB'lık
+   * bir PNG başlığında 20 000 × 20 000 bildirip çözüldüğünde 1,6 GB tutar.
+   * `maxImageDecodedBytes` ise bit derinliği yüksek görselleri yakalar. */
   maxImageBytes: num('MAX_IMAGE_BYTES', 16 * 1024 * 1024),
   maxImagePixels: num('MAX_IMAGE_PIXELS', 50_000_000),
+  maxImageDecodedBytes: num('MAX_IMAGE_DECODED_BYTES', 512 * 1024 * 1024),
   maxFontBytes: num('MAX_FONT_BYTES', 8 * 1024 * 1024),
   maxFonts: num('MAX_FONTS', 32),
   maxAssets: num('MAX_ASSETS', 256),
@@ -55,6 +59,25 @@ const LIMITS = {
 
   /* LTV */
   maxDssEntries: num('MAX_DSS_ENTRIES', 512)
+};
+
+/**
+ * Uzak varlık (belgeden gelen `http(s)://` görsel/font) ayarları.
+ *
+ * VARSAYILAN KAPALI. Açmanın tek yolu `REMOTE_ASSET_HOSTS` ile bir İZİN
+ * LİSTESİ vermektir. "Aç ama her yere izin ver" seçeneği kasten yoktur:
+ * izin listesi olmadan açmak, belgeye sunucunun ağına istek attırma
+ * yetkisi vermek demektir (SSRF). Adres denetimi (özel/geri döngü/üstveri
+ * blokları) zaten her hâlükârda çalışır ama tek başına yeterli sayılmaz —
+ * DNS ile ulaşılabilen iç servisler o denetimden geçebilir.
+ */
+const REMOTE = {
+  allowHosts: (process.env.REMOTE_ASSET_HOSTS || '')
+    .split(',').map((h) => h.trim()).filter(Boolean),
+  timeoutMs: num('REMOTE_ASSET_TIMEOUT_MS', 8000),
+  maxRedirects: num('REMOTE_ASSET_MAX_REDIRECTS', 3),
+  maxPerDocument: num('REMOTE_ASSET_MAX', 16),
+  get enabled() { return this.allowHosts.length > 0; }
 };
 
 /** Hız sınırı ayarları. */
@@ -279,7 +302,7 @@ function auditLog(event) {
 }
 
 module.exports = {
-  LIMITS, RATE, AUTH, PolicyError,
+  LIMITS, RATE, REMOTE, AUTH, PolicyError,
   checkBytes, checkCount, checkPdf,
   authorize, authEnabled, classify, clientKey, presentedToken, tokenValid,
   RateLimiter, auditLog

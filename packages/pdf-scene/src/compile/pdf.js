@@ -21,6 +21,7 @@ const { PdfEmitter, embedFont } = require('@fitfak/pdf-html/src/pdf/emitter');
 const PngParser = require('@fitfak/pdf/src/media/PngParser');
 const JpegParser = require('@fitfak/pdf/src/media/JpegParser');
 const { FontManager } = require('@fitfak/pdf-html/src/font/manager');
+const { readFontInfo } = require('@fitfak/pdf/src/fonts/FontInfo');
 
 const { validateScene, SceneError, parseColor } = require('../validate');
 const geometry = require('../geometry');
@@ -407,15 +408,67 @@ function compileToPdf(sceneInput, o = {}) {
   }
   if (!assets) throw new SceneError('ERR_NO_ASSETS', 'Varlık yöneticisi gerekli');
 
-  /* --- fontlar --- */
+  /* --- fontlar ---------------------------------------------------
+   * Üç kaynak: çağıranın verdiği yüzler, sahnenin VARLIK havuzundaki
+   * fontlar (kullanıcının yüklediği) ve — hiçbiri yoksa — hata.
+   *
+   * Varlık fontlarının aile adı DOSYA ADINDAN değil, fontun kendi `name`
+   * tablosundan okunur: dosya adı belgeden gelir ve yalan söyleyebilir. */
+  const warnings = [];
   const fonts = new FontManager();
-  for (const face of o.fonts || []) fonts.register(face);
+  const knownFamilies = new Set();
+
+  for (const face of o.fonts || []) {
+    fonts.register(face);
+    knownFamilies.add(String(face.family).toLowerCase());
+  }
+
+  for (const asset of assets.manifest()) {
+    if (asset.kind !== 'font') continue;
+    const bytes = assets.bytes(asset.id);
+    if (!bytes) continue;
+    try {
+      const info = readFontInfo(bytes);
+      fonts.register({
+        family: info.family, weight: info.weight, style: info.style,
+        src: bytes, id: asset.id
+      });
+      knownFamilies.add(info.family.toLowerCase());
+    } catch (err) {
+      warnings.push({
+        code: err.code || 'ERR_FONT_INVALID', assetId: asset.id,
+        message: `Gömülü font okunamadı (${asset.name || asset.id}): ${err.message}`
+      });
+    }
+  }
+
   if (fonts.isEmpty) {
     throw new SceneError('ERR_NO_FONT',
-      'En az bir font gerekli: compileToPdf(scene, { fonts: [{ family, src }] })');
+      'En az bir font gerekli: compileToPdf(scene, { fonts: [{ family, src }] }) ' +
+      'ya da sahnenin varlık havuzunda bir font');
   }
-  const resolveFace = (family, bold, italic) =>
-    fonts.resolve([family || 'Ubuntu'], bold ? 700 : 400, italic ? 'italic' : 'normal');
+
+  const fallbackFamily = (o.fonts && o.fonts[0] && o.fonts[0].family) || 'Ubuntu';
+  const reportedFallbacks = new Set();
+
+  /**
+   * Yüz seçimi. İstenen aile YOKSA sessizce başkası kullanılmaz; uyarı
+   * verilir. Sessiz ikame, belgenin ekranda ve kâğıtta farklı görünmesinin
+   * en sık sebebidir ve fark edilmesi en zor olanıdır.
+   */
+  const resolveFace = (family, bold, italic) => {
+    const wanted = String(family || fallbackFamily);
+    if (!knownFamilies.has(wanted.toLowerCase()) && !reportedFallbacks.has(wanted)) {
+      reportedFallbacks.add(wanted);
+      warnings.push({
+        code: 'WARN_FONT_FALLBACK', family: wanted,
+        message: `"${wanted}" ailesi yüklü değil; yerine kayıtlı bir font kullanıldı. ` +
+                 `Satır genişlikleri tasarlandığı gibi çıkmayabilir.`
+      });
+    }
+    return fonts.resolve([wanted, fallbackFamily], bold ? 700 : 400,
+      italic ? 'italic' : 'normal');
+  };
 
   /* --- karekodlar: varlık havuzuna PNG olarak eklenir --- */
   const qrCache = new Map();
@@ -436,7 +489,6 @@ function compileToPdf(sceneInput, o = {}) {
 
   /* --- çizim listeleri --- */
   const pages = [];
-  const warnings = [];
   const manifestPages = [];
 
   for (const [index, page] of scene.pages.entries()) {

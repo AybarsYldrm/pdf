@@ -75,6 +75,15 @@ export class SceneEditor {
     this._buildToolbar();
     this._bindClipboard();
 
+    // Seçilebilir fontları sunucudan öğren: kullanıcı olmayan bir aileyi
+    // yazıp belgeyi sessizce başka fontla ürettirmesin.
+    try {
+      const health = await this.opts.api.health();
+      this.inspector.setFontFamilies((health.fonts || []).map((f) => f.family));
+    } catch {
+      this.inspector.setFontFamilies([]);
+    }
+
     this.newDocument();
   }
 
@@ -98,9 +107,18 @@ export class SceneEditor {
 
     for (const a of assetList) {
       const bytes = base64ToBytes(a.base64);
-      const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
+      const url = a.kind === 'font'
+        ? null
+        : URL.createObjectURL(new Blob([bytes], { type: a.mime }));
       this.assets.set(a.id, { meta: a, bytes, url });
-      this.canvas.setAssetUrl(a.id, url);
+      if (url) this.canvas.setAssetUrl(a.id, url);
+      if (a.kind === 'font') {
+        try {
+          const info = this.lib.readFontInfo(bytes);
+          this.canvas.embeddedFontFamilies.add(info.family);
+          this._installFontFace(info.family, bytes);
+        } catch { /* bozuk font: derleyici uyaracak */ }
+      }
     }
 
     const scene = this.lib.Scene.fromJSON(sceneJson);
@@ -137,7 +155,17 @@ export class SceneEditor {
         'Görsel',
         el('input', {
           type: 'file', accept: 'image/png,image/jpeg', hidden: true,
-          onchange: (e) => this._addImage(e.target.files[0])
+          onchange: (e) => { this._addImage(e.target.files[0]); e.target.value = ''; }
+        })
+      ]),
+      el('label', {
+        class: 'btn btn--sm sc-tools__file',
+        title: 'Kendi fontunuzu belgeye gömün (TTF/OTF)'
+      }, [
+        'Font',
+        el('input', {
+          type: 'file', accept: '.ttf,.otf,font/ttf,font/otf', hidden: true,
+          onchange: (e) => { this._addFont(e.target.files[0]); e.target.value = ''; }
         })
       ])
     ]));
@@ -264,6 +292,51 @@ export class SceneEditor {
     }
   }
 
+  /**
+   * Kullanıcının kendi fontunu belgeye gömer.
+   *
+   * Aile adı DOSYA ADINDAN değil, fontun kendi `name` tablosundan okunur —
+   * sunucu da aynı şeyi yapar, iki taraf aynı adı görür.
+   */
+  async _addFont(file) {
+    if (!file) return;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const meta = this.scene.assets.add(bytes, { name: file.name, kind: 'font' });
+
+      // Aile adı fontun KENDİ `name` tablosundan okunur — sunucu da aynı
+      // kodu çalıştırır, iki taraf aynı adı görür. Dosya adına bakmak,
+      // tuvalde "Ubuntu" yazan bir düğümün sunucuda bulunamaması demekti.
+      const info = this.lib.readFontInfo(bytes);
+      this.canvas.embeddedFontFamilies.add(info.family);
+      this.assets.set(meta.id, { meta, bytes, url: null });
+
+      // Tuvalde de gerçekten o fontla görünsün
+      await this._installFontFace(info.family, bytes);
+
+      this.inspector.render();
+      this._touched();
+      this._status(`"${info.family}" gömüldü`);
+    } catch (err) {
+      this._status(`Font eklenemedi: ${err.message}`, 'error');
+    }
+  }
+
+  /** Fontu tarayıcıya tanıtır ki tuval önizlemesi doğru görünsün. */
+  async _installFontFace(family, bytes) {
+    if (typeof FontFace === 'undefined' || !document.fonts) return;
+    try {
+      const face = new FontFace(family, bytes.buffer.slice(
+        bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      await face.load();
+      document.fonts.add(face);
+    } catch {
+      // Tarayıcı fontu çizemiyorsa da PDF tarafı çalışmaya devam eder;
+      // yalnız önizleme yedek fontla görünür.
+      this._status(`"${family}" tuvalde gösterilemiyor ama PDF'e gömülecek`, 'warn');
+    }
+  }
+
   /** Çift tıklamada metni düzenlemek için paneldeki alana odaklanır. */
   _editText(nodeId) {
     const node = this.scene.node(nodeId);
@@ -317,9 +390,21 @@ export class SceneEditor {
       if (this.assets.has(meta.id)) continue;
       const bytes = this.scene.assets.bytes(meta.id);
       if (!bytes) continue;
-      const url = URL.createObjectURL(new Blob([bytes], { type: meta.mime }));
+
+      // Fontlar `<img src>` ile gösterilmez; onlara nesne adresi gerekmez.
+      const url = meta.kind === 'image'
+        ? URL.createObjectURL(new Blob([bytes], { type: meta.mime }))
+        : null;
+
       this.assets.set(meta.id, { meta, bytes, url });
-      this.canvas.setAssetUrl(meta.id, url);
+      if (url) this.canvas.setAssetUrl(meta.id, url);
+      if (meta.kind === 'font') {
+        try {
+          const info = this.lib.readFontInfo(bytes);
+          this.canvas.embeddedFontFamilies.add(info.family);
+          this._installFontFace(info.family, bytes);
+        } catch { /* bozuk font: derleyici uyaracak */ }
+      }
     }
     this.canvas.render();
   }
@@ -370,8 +455,9 @@ export class SceneEditor {
   }
 
   _releaseAssets() {
-    for (const a of this.assets.values()) URL.revokeObjectURL(a.url);
+    for (const a of this.assets.values()) if (a.url) URL.revokeObjectURL(a.url);
     this.assets.clear();
+    this.canvas.embeddedFontFamilies.clear();
   }
 }
 

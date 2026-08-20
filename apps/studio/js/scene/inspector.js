@@ -15,6 +15,9 @@ import { el, clear } from '../lib/dom.js';
 const FIELDS = {
   text: [
     { key: 'text', label: 'Metin', kind: 'textarea' },
+    // Seçenekler sunucudan gelir (`/api/health`): kullanıcı olmayan bir
+    // aileyi yazıp belgeyi sessizce başka fontla üretmesin.
+    { key: 'fontFamily', label: 'Font', kind: 'families' },
     { key: 'fontSize', label: 'Punto', kind: 'number', min: 1, max: 400, step: 0.5 },
     { key: 'lineHeight', label: 'Satır aralığı', kind: 'number', min: 0.5, max: 4, step: 0.05 },
     { key: 'color', label: 'Renk', kind: 'color' },
@@ -74,6 +77,29 @@ export class Inspector {
     this.root = root;
     this.canvas = canvas;
     this.onChange = () => {};
+    /** Sunucunun sunduğu font aileleri (`/api/health` → `fonts`). */
+    this.fontFamilies = [];
+  }
+
+  /**
+   * Seçilebilir font ailelerini bildirir.
+   *
+   * Sunucudan gelenlere, sahnenin varlık havuzuna YÜKLENMİŞ fontlar da
+   * eklenir: kullanıcı kendi fontunu yüklediyse listede görmelidir.
+   */
+  setFontFamilies(serverFamilies) {
+    this.fontFamilies = Array.isArray(serverFamilies) ? serverFamilies.slice() : [];
+  }
+
+  _allFamilies() {
+    const names = new Set(this.fontFamilies);
+    const current = this.scene && [...this.scene.selection]
+      .map((id) => this.scene.node(id))
+      .filter((n) => n && n.fontFamily)
+      .map((n) => n.fontFamily);
+    for (const n of current || []) names.add(n);
+    for (const name of this.canvas.embeddedFontFamilies || []) names.add(name);
+    return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }
 
   get scene() { return this.canvas.scene; }
@@ -265,12 +291,17 @@ export class Inspector {
           })
         ]);
 
-      case 'enum': {
+      case 'enum':
+      case 'families': {
+        const values = spec.kind === 'families' ? this._allFamilies() : spec.values;
         const select = el('select', {
           class: 'input',
           onchange: (e) => write(e.target.value)
         });
-        for (const v of spec.values) {
+        if (spec.kind === 'families' && !values.length) {
+          select.appendChild(el('option', { value: '' }, '(font listesi alınamadı)'));
+        }
+        for (const v of values) {
           select.appendChild(el('option', { value: v, selected: v === value }, v));
         }
         return el('label', { class: 'field' }, [

@@ -17,12 +17,14 @@
  */
 
 const crypto = require('crypto');
+const { assertImageWithinLimits } = require('@fitfak/pdf/src/media/imageinfo');
 
 const DEFAULT_LIMITS = {
   maxAssets: 512,
   maxBytes: 16 * 1024 * 1024,        // tek varlık
   maxTotalBytes: 128 * 1024 * 1024,  // toplam
-  maxPixels: 50_000_000
+  maxPixels: 50_000_000,
+  maxDecodedBytes: 512 * 1024 * 1024
 };
 
 class AssetError extends Error {
@@ -60,30 +62,19 @@ function sniff(bytes) {
   return null;
 }
 
-/** PNG/JPEG boyutlarını başlıktan okur (tam çözmeden). */
-function readImageSize(bytes, mime) {
-  if (mime === 'image/png') {
-    // IHDR her zaman ilk yığındır: 8 bayt imza + 4 uzunluk + 4 tip
-    if (bytes.length < 24) return null;
-    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+/**
+ * Görsel ölçülerini başlıktan okur.
+ *
+ * Uygulama `@fitfak/pdf/src/media/imageinfo`tedir ve TEK kopyadır: aynı
+ * başlığı iki yerde okumak, iki yerin farklı sayı bulmasıyla biter.
+ */
+function readImageSize(bytes) {
+  try {
+    const info = require('@fitfak/pdf/src/media/imageinfo').inspectImage(bytes);
+    return { width: info.width, height: info.height };
+  } catch {
+    return null;
   }
-  if (mime === 'image/jpeg') {
-    let p = 2;
-    while (p + 9 < bytes.length) {
-      if (bytes[p] !== 0xff) { p++; continue; }
-      const marker = bytes[p + 1];
-      // SOF0..SOF15, DHT/DAC/RST hariç
-      if (marker >= 0xc0 && marker <= 0xcf &&
-          marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { height: bytes.readUInt16BE(p + 5), width: bytes.readUInt16BE(p + 7) };
-      }
-      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd9)) { p += 2; continue; }
-      const len = bytes.readUInt16BE(p + 2);
-      if (len < 2) return null;
-      p += 2 + len;
-    }
-  }
-  return null;
 }
 
 class AssetManager {
@@ -157,14 +148,22 @@ class AssetManager {
     if (meta.name) asset.name = String(meta.name).slice(0, 256);
 
     if (type.kind === 'image') {
-      const dim = readImageSize(buf, type.mime);
-      asset.width = dim ? dim.width : 0;
-      asset.height = dim ? dim.height : 0;
-      if (asset.width * asset.height > this.limits.maxPixels) {
-        throw new AssetError('ERR_ASSET_PIXELS',
-          `Görsel çok büyük: ${asset.width}×${asset.height} ` +
-          `(sınır ${this.limits.maxPixels} piksel)`);
+      // Sınır BAŞLIKTAN okunan piksel sayısına uygulanır, dosya boyutuna
+      // değil: 40 KB'lık bir PNG 20 000 × 20 000 bildirip çözüldüğünde
+      // 1,6 GB tutabilir. Bozuk başlık da burada reddedilir.
+      let info;
+      try {
+        info = assertImageWithinLimits(buf, {
+          maxPixels: this.limits.maxPixels,
+          maxDecodedBytes: this.limits.maxDecodedBytes
+        });
+      } catch (err) {
+        throw new AssetError(
+          err.code === 'ERR_IMAGE_PIXELS' ? 'ERR_ASSET_PIXELS' : (err.code || 'ERR_ASSET_IMAGE'),
+          err.message);
       }
+      asset.width = info.width;
+      asset.height = info.height;
     }
 
     this.byId.set(asset.id, asset);

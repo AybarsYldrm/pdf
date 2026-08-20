@@ -224,12 +224,30 @@ test('paket: tarayıcıda üretilen sahne SUNUCUDA doğrulanır', () => {
 
 test('paket: derleyiciler ve içe aktarıcılar pakete GİRMEZ', () => {
   // Bunlar font/görsel ayrıştırıcılarına ihtiyaç duyar ve sunucuda çalışır.
-  // Pakete sızarlarsa tarayıcı yükü katlanır ve çözülemeyen require'lar oluşur.
+  // Pakete sızarlarsa tarayıcı yükü katlanır.
   const source = buildBrowserBundle();
   assert.ok(!source.includes("require('@fitfak/pdf-html"), 'pdf-html pakete girmemeli');
-  assert.ok(!source.includes("require('@fitfak/pdf/src"), 'pdf ayrıştırıcıları girmemeli');
   assert.ok(!/__define\('\.\/compile/.test(source), 'derleyiciler girmemeli');
   assert.ok(!/__define\('\.\/import/.test(source), 'içe aktarıcılar girmemeli');
+});
+
+test('paket: her require ÇÖZÜLEBİLİR bir modüle gider', () => {
+  // Asıl kural "şu paket girmesin" değil, "hiçbir require boşa çıkmasın".
+  // Boşa çıkan bir require tarayıcıda ancak o kod yolu çalışınca patlar —
+  // yani en kötü anda.
+  const source = buildBrowserBundle();
+
+  const defined = new Set(
+    [...source.matchAll(/__define\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
+  assert.ok(defined.size >= 7, `tanımlı modül az: ${defined.size}`);
+
+  const required = new Set(
+    [...source.matchAll(/\brequire\((?:'([^']+)'|"([^"]+)")\)/g)].map((m) => m[1] || m[2]));
+
+  for (const id of required) {
+    if (id === 'crypto') continue;          // uyumluluk katmanı karşılar
+    assert.ok(defined.has(id), `pakette çözülemeyen require: ${id}`);
+  }
 });
 
 test('paket: çözülemeyen bir modül sessizce yutulmaz', () => {

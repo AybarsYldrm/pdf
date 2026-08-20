@@ -19,7 +19,8 @@ const crypto = require('crypto');
 const { URL } = require('url');
 
 const paper = require('@fitfak/paper');
-const { render } = require('@fitfak/pdf-html');
+const { render, renderAsync } = require('@fitfak/pdf-html');
+const { FontRegistry } = require('@fitfak/pdf-html/src/font/registry');
 const { renderStamp, templates } = require('@fitfak/stamp');
 const { PAdESManager } = require('@fitfak/pades/src/utils/pades_manager');
 const { buildVisibleSignature, fromManifestSlot } = require('@fitfak/pades/src/signature/visible');
@@ -47,6 +48,9 @@ const CONFIG = {
   // Birincil imzalama modeli iki fazlı tarayıcı imzalamasıdır.
   allowServerSidePfx: process.env.ALLOW_SERVER_PFX === '1',
   defaultFont: process.env.PDF_FONT || path.join(ROOT, 'assets', 'Ubuntu-Regular.ttf'),
+  // Sunulabilir fontların TEK dizini. İstemci buradan yalnız AİLE ADI seçer.
+  // Yalnız .ttf/.otf taranır; aynı dizindeki görseller etkilenmez.
+  fontDir: process.env.FONT_DIR || path.join(ROOT, 'assets'),
   // Belgeden gelen varlıkların okunabileceği TEK dizin (kum havuzu).
   // Depo kökü VERİLMEZ: güvenilmez HTML kaynak kodunu ve anahtarları okurdu.
   assetRoot: process.env.ASSET_ROOT || path.join(ROOT, 'assets')
@@ -60,6 +64,39 @@ const sessions = new Map();
 
 /** Hız sınırlayıcı — bellek içi, tek süreç. */
 const rateLimiter = new policy.RateLimiter();
+
+/* ------------------------------------------------------------------ */
+/* Font kayıt defteri                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sunucunun sunabildiği fontlar.
+ *
+ * İstemci font DOSYA YOLU veremez — bu, belgeden gelen bir yolun dosya
+ * sistemine ulaşması olurdu (docs/08-guvenlik.md G-01). İstemci yalnız
+ * AİLE ADI seçer; hangi dosyanın karşılık geldiğine sunucu karar verir.
+ *
+ * Dizin ilk kullanımda taranır: açılışta taramak, font dizini olmayan bir
+ * kurulumda gereksiz iş yapardı.
+ */
+let _fontRegistry = null;
+
+function fontRegistry() {
+  if (_fontRegistry) return _fontRegistry;
+
+  const registry = new FontRegistry({ maxBytes: policy.LIMITS.maxFontBytes });
+  registry.scanDirectory(CONFIG.fontDir);
+
+  // Dizinde hiç font yoksa en azından varsayılan font kayıtlı olsun:
+  // fontsuz bir sunucu hiçbir belge üretemez.
+  if (registry.isEmpty) {
+    try { registry.register({ file: CONFIG.defaultFont, origin: 'default' }); }
+    catch (err) { console.warn('Varsayılan font kaydedilemedi:', err.message); }
+  }
+
+  _fontRegistry = registry;
+  return registry;
+}
 
 function putSession(data) {
   const id = crypto.randomBytes(16).toString('hex');
@@ -214,7 +251,11 @@ const routes = {
       themes: paper.THEMES,
       stampTemplates: Object.keys(templates),
       conformanceProfiles: ['pdf/a-1b', 'pdf/a-2b', 'pdf/a-3b', 'pdf/ua', 'pdf/a-2b+pdf/ua'],
+      // İstemci hangi aileleri seçebileceğini BURADAN öğrenir; tahmin edip
+      // sessizce yanlış fontla belge üretmez.
+      fonts: fontRegistry().describe(),
       serverSidePfx: CONFIG.allowServerSidePfx,
+      remoteAssets: policy.REMOTE.enabled,
       maxBodyBytes: CONFIG.maxBodyBytes
     });
   },
@@ -236,10 +277,12 @@ const routes = {
     if (body.theme !== null) css.push(...paper.stack(body.theme || 'kurumsal'));
     if (body.css) css.push(...(Array.isArray(body.css) ? body.css : [body.css]));
 
-    const result = render({
+    const result = await renderAsync({
       html: body.html,
       css,
-      fonts: body.fonts || [{ family: 'Ubuntu', src: CONFIG.defaultFont }],
+      // İstemci font DOSYASI değil AİLE ADI seçer; hangi dosyanın
+      // yükleneceğine kayıt defteri karar verir (bkz. G-01).
+      fonts: htmlFonts(body.fonts),
       page: body.page || { size: 'A4', margin: '20mm 18mm' },
       metadata: body.metadata || {},
       conformance: body.conformance || null,
@@ -249,8 +292,21 @@ const routes = {
       assetRoots: [CONFIG.assetRoot],
       assetLimits: {
         maxImageBytes: policy.LIMITS.maxImageBytes,
+        maxImagePixels: policy.LIMITS.maxImagePixels,
+        maxImageDecodedBytes: policy.LIMITS.maxImageDecodedBytes,
         maxFontBytes: policy.LIMITS.maxFontBytes,
         maxAssets: policy.LIMITS.maxAssets
+      },
+      // Uzak varlıklar VARSAYILAN OLARAK KAPALIDIR. Açmak için
+      // REMOTE_ASSET_HOSTS tanımlanmalıdır: izin listesi olmadan açmak,
+      // belgeye sunucunun ağına istek attırma yetkisi vermektir.
+      allowRemoteAssets: policy.REMOTE.enabled,
+      remote: {
+        allowHosts: policy.REMOTE.allowHosts,
+        maxBytes: policy.LIMITS.maxImageBytes,
+        timeoutMs: policy.REMOTE.timeoutMs,
+        maxRedirects: policy.REMOTE.maxRedirects,
+        maxRemote: policy.REMOTE.maxPerDocument
       }
     });
 
@@ -365,6 +421,8 @@ const routes = {
         assetRoots: [CONFIG.assetRoot],
         assetLimits: {
           maxImageBytes: policy.LIMITS.maxImageBytes,
+          maxImagePixels: policy.LIMITS.maxImagePixels,
+          maxImageDecodedBytes: policy.LIMITS.maxImageDecodedBytes,
           maxFontBytes: policy.LIMITS.maxFontBytes,
           maxAssets: policy.LIMITS.maxAssets
         }
@@ -865,18 +923,40 @@ function applyOp(doc, op) {
  * sistemine ulaşması demek olurdu (bkz. docs/08-guvenlik.md G-01). Yalnız
  * sunucunun tanıdığı aileler seçilebilir.
  */
+/**
+ * HTML yolu için font listesi.
+ *
+ * CSS `font-family` istekleri belgeden gelir; hangi dosyaların yükleneceği
+ * ise sunucunun kararıdır. Hiçbir aile belirtilmezse HEPSİ yüklenir —
+ * belgedeki CSS hangisini isterse istesin bulabilsin diye.
+ */
+function htmlFonts(requested) {
+  const registry = fontRegistry();
+  const families = (Array.isArray(requested) ? requested : [])
+    .map((f) => (typeof f === 'string' ? f : (f && f.family)))
+    .filter(Boolean);
+
+  const wanted = families.length ? families : registry.familyNames();
+  const { faces } = registry.facesFor(wanted);
+  return faces.length ? faces : [{ family: 'Ubuntu', src: CONFIG.defaultFont }];
+}
+
 function sceneFonts(requested) {
-  const available = { Ubuntu: CONFIG.defaultFont };
-  const families = Array.isArray(requested) ? requested : null;
-  if (!families || !families.length) {
-    return [{ family: 'Ubuntu', src: available.Ubuntu }];
-  }
-  const out = [];
-  for (const f of families) {
-    const family = typeof f === 'string' ? f : (f && f.family);
-    if (available[family]) out.push({ family, src: available[family] });
-  }
-  return out.length ? out : [{ family: 'Ubuntu', src: available.Ubuntu }];
+  const registry = fontRegistry();
+  const families = (Array.isArray(requested) ? requested : [])
+    .map((f) => (typeof f === 'string' ? f : (f && f.family)))
+    .filter(Boolean);
+
+  // İstenen aile yoksa varsayılan aile döner; hangi ailenin bulunamadığını
+  // derleyici `WARN_FONT_FALLBACK` ile bildirir, burada sessizce yutulmaz.
+  const wanted = families.length ? families : [registry.defaultFamily()].filter(Boolean);
+  const { faces } = registry.facesFor(wanted);
+  if (faces.length) return faces;
+
+  const fallback = registry.facesFor([registry.defaultFamily()].filter(Boolean));
+  return fallback.faces.length
+    ? fallback.faces
+    : [{ family: 'Ubuntu', src: CONFIG.defaultFont }];
 }
 
 /**
