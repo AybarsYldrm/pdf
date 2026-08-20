@@ -927,22 +927,58 @@ function onFound(text) {
 }
 
 /* ── Sunucu entegrasyonu ── */
+
+/**
+ * Karekod yükünü sorguya çevirir.
+ *
+ * Yük iki biçimden biridir: doğrudan belge özeti ya da doğrulama adresi
+ * (`https://.../dogrula/DOC-123`). Adresin son parçası belge numarasıdır.
+ * Yükü olduğu gibi "hash" diye göndermek, adresle gelen her belgeyi
+ * "kayıtlı değil" yapardı.
+ */
+function toQuery(text) {
+  const raw = String(text || '').trim();
+  if (/^[0-9a-fA-F]{32,128}$/.test(raw)) return { hash: raw.toLowerCase() };
+
+  try {
+    const url = new URL(raw);
+    const last = url.pathname.split('/').filter(Boolean).pop() || '';
+    if (/^[0-9a-fA-F]{32,128}$/.test(last)) return { hash: last.toLowerCase() };
+    if (last) return { docNo: last };
+  } catch { /* adres değil */ }
+
+  return { docNo: raw.slice(0, 128) };
+}
+
 function sendToServer(data) {
   fetch('/api/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ hash: data, ts: Date.now() })
+    body: JSON.stringify({ ...toQuery(data), ts: Date.now() })
   })
   .then(r => r.json())
   .then(res => {
-    if (res.status === 'success') {
-      setStatus('✓ Doğrulandı — Zincir ID: ' + (res.documentId || '').substring(0, 20), 'ok');
+    // DÖRT CEVAP, DÖRT ANLAM. "Bilinmiyor" ile "geçersiz" aynı şey değildir
+    // ve kullanıcıya aynı şeymiş gibi gösterilmemelidir.
+    if (res.status === 'verified') {
+      const who = res.signer ? ' · ' + res.signer : '';
+      const when = res.signedAt ? ' · ' + new Date(res.signedAt).toLocaleString('tr-TR') : '';
+      setStatus('✓ Kayıtlı ve geçerli' + who + when, 'ok');
+    } else if (res.status === 'invalid') {
+      setStatus('✗ Kayıtlı ama imza GEÇERSİZDİ: ' + (res.message || ''), 'err');
+    } else if (res.status === 'indeterminate') {
+      setStatus('! Kayıtlı ama karar verilemedi: ' + (res.message || ''), 'busy');
+    } else if (res.status === 'unverified') {
+      setStatus('? Bu belge kayıtlı değil — doğrulanamadı', 'busy');
+    } else if (res.status === 'unavailable') {
+      setStatus('? Doğrulama kaydı kullanılamıyor: ' + (res.message || ''), 'busy');
     } else {
-      setStatus('✗ Geçersiz veya sahte belge: ' + (res.message || ''), 'err');
+      setStatus('✗ ' + (res.message || 'Sorgu başarısız'), 'err');
     }
   })
   .catch(() => {
-    setStatus('Okunan: ' + (data.length > 60 ? data.substring(0,60) + '…' : data), 'ok');
+    setStatus('Sunucuya ulaşılamadı; okunan: ' +
+      (data.length > 60 ? data.substring(0,60) + '…' : data), 'err');
   });
 }
 

@@ -16,12 +16,24 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+const { Registry } = require('@fitfak/registry');
+
 const CONFIG = {
   port: Number(process.env.SCANNER_PORT) || 8080,
   host: process.env.SCANNER_HOST || '127.0.0.1',
   maxBodyBytes: Number(process.env.SCANNER_MAX_BODY) || 64 * 1024,
   requestTimeoutMs: Number(process.env.SCANNER_TIMEOUT_MS) || 15_000,
-  headersTimeoutMs: Number(process.env.SCANNER_HEADERS_TIMEOUT_MS) || 10_000
+  headersTimeoutMs: Number(process.env.SCANNER_HEADERS_TIMEOUT_MS) || 10_000,
+  /**
+   * Doğrulama kaydı — İMZALAYAN SUNUCUYLA AYNI DİZİN.
+   *
+   * Tarayıcı deftere yalnız OKUMAK için bakar; yazan taraf imza sunucusudur.
+   * Anahtar burada da gerekir çünkü zincir doğrulaması onsuz yapılamaz —
+   * doğrulanmamış bir defteri okuyup "doğrulandı" demek, defterin hiç
+   * olmamasından kötüdür.
+   */
+  registryDir: process.env.REGISTRY_DIR || '',
+  registryKey: process.env.REGISTRY_KEY || ''
 };
 
 /** Arayüz dosyası — dizindeki gerçek adla eşleşmeli. */
@@ -35,6 +47,108 @@ const SECURITY_HEADERS = {
     "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
     "media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'"
 };
+
+/**
+ * Doğrulama kaydı — yalnız OKUMA.
+ *
+ * Yapılandırılmamışsa açık açık "kapalı" denir. Kapalı bir defteri açıkmış
+ * gibi göstermek, sahte bir "doğrulandı" cevabı vermenin başka biçimidir.
+ */
+let _registry = null;
+
+function registry() {
+  if (_registry) return _registry;
+  try {
+    _registry = new Registry({ dir: CONFIG.registryDir, key: CONFIG.registryKey });
+  } catch (err) {
+    console.warn('[kayıt defteri] açılamadı:', err.message);
+    _registry = new Registry({});                       // kapalı defter
+  }
+  return _registry;
+}
+
+/**
+ * Bir belgeyi kayıtta arar.
+ *
+ * ÜÇ AYRI CEVAP VARDIR VE BİRBİRİNE KARIŞTIRILMAMALIDIR:
+ *   `unavailable` — defter yok/okunamıyor. Bilgi YOK demektir, "geçersiz"
+ *                   demek değildir.
+ *   `unverified`  — defter var, bu belge KAYITLI DEĞİL. Belge sahte
+ *                   olabilir, ya da bu sunucudan geçmemiş olabilir.
+ *   `verified` / `invalid` — kayıt var; imzanın kayıt anındaki doğrulama
+ *                   sonucu bildirilir.
+ *
+ * Kayıt, imzanın ATILDIĞI ANDAKİ doğrulamadır. Belge o günden sonra
+ * değiştirilmişse özeti tutmayacağı için zaten bulunamaz; ama sertifika
+ * o günden sonra iptal edilmişse bunu kayıt bilmez ve cevap bunu söyler.
+ */
+function lookup({ hash, docNo }) {
+  const now = new Date().toISOString();
+  const reg = registry();
+
+  if (!reg.enabled) {
+    return {
+      status: 'unavailable',
+      message: 'Doğrulama kaydı yapılandırılmadı; bu belge hakkında bilgi verilemiyor.',
+      documentId: hash || docNo,
+      timestamp: now
+    };
+  }
+
+  const chain = reg.verifyChain();
+  if (!chain.ok) {
+    // Defterin kendisi bozuksa içindeki hiçbir kayıt kanıt değildir.
+    return {
+      status: 'unavailable',
+      message: `Doğrulama kaydı bütünlüğü bozuk (${chain.reason}); ` +
+               'kayıtlara güvenilemez.',
+      documentId: hash || docNo,
+      timestamp: now
+    };
+  }
+
+  const record = (hash && reg.lookup(hash)) || (docNo && reg.lookupByDocNo(docNo)) || null;
+  if (!record) {
+    return {
+      status: 'unverified',
+      message: 'Bu belge kayıtlı değil.',
+      documentId: hash || docNo,
+      timestamp: now
+    };
+  }
+
+  // ÜÇ SONUÇ, ÜÇ ANLAM (ETSI EN 319 102-1): geçti, geçmedi, KARAR VERİLEMEDİ.
+  // "Karar verilemedi"ye "geçersiz" demek, güven zinciri eksik olan her
+  // belgeyi sahte ilan etmek olurdu.
+  const indication = record.indication || '';
+  const passed = indication === 'TOTAL-PASSED';
+  const failed = indication === 'TOTAL-FAILED';
+
+  return {
+    status: passed ? 'verified' : failed ? 'invalid' : 'indeterminate',
+    message: passed
+      ? 'Belge imzalandığı anda geçerli bir imza taşıyordu.'
+      : failed
+        ? `İmza kayıt anında GEÇERSİZDİ (${record.subIndication || indication}).`
+        : 'İmza kayıt anında doğrulanamadı; karar verilemedi ' +
+          `(${record.subIndication || indication || 'bilinmiyor'}).`,
+    documentId: record.documentHash,
+    docNo: record.docNo || null,
+    signer: record.signer || null,
+    issuer: record.issuer || null,
+    level: record.level || null,
+    signedAt: record.signedAt,
+    signatureCount: record.signatureCount,
+    timestamped: record.timestamped,
+    indication: record.indication || null,
+    subIndication: record.subIndication || null,
+    // Kaydın NE ANLAMA GELDİĞİ cevabın içinde durur: kullanıcı "doğrulandı"
+    // damgasının kapsamını tahmin etmek zorunda kalmasın.
+    scope: 'Kayıt, imzanın atıldığı andaki doğrulamadır; sertifika o tarihten ' +
+           'sonra iptal edilmiş olabilir.',
+    timestamp: now
+  };
+}
 
 function sendJson(res, status, body) {
   const buf = Buffer.from(JSON.stringify(body), 'utf8');
@@ -120,23 +234,22 @@ function createServer() {
       }
 
       const hash = typeof parsed.hash === 'string' ? parsed.hash.trim() : '';
-      if (!/^[0-9a-fA-F]{32,128}$/.test(hash)) {
+      const docNo = typeof parsed.docNo === 'string' ? parsed.docNo.trim().slice(0, 128) : '';
+
+      if (hash && !/^[0-9a-fA-F]{32,128}$/.test(hash)) {
         return sendJson(res, 400, {
           status: 'error',
           message: 'hash alanı 32–128 karakter onaltılık bir dizge olmalı.'
         });
       }
+      if (!hash && !docNo) {
+        return sendJson(res, 400, {
+          status: 'error',
+          message: 'hash ya da docNo alanlarından biri gerekli.'
+        });
+      }
 
-      // NOT: Burada henüz gerçek bir doğrulama YAPILMIYOR. Zincir/kayıt
-      // bağlantısı kurulana kadar bu uç yalnızca girdiyi kabul eder ve
-      // "kayıtlı değil" der. Sahte bir "doğrulandı" cevabı vermek,
-      // güvenlik açısından hiç cevap vermemekten kötüdür.
-      return sendJson(res, 200, {
-        status: 'unverified',
-        message: 'Doğrulama kaydı bağlanmadı; bu belge hakkında bilgi verilemiyor.',
-        documentId: hash,
-        timestamp: new Date().toISOString()
-      });
+      return sendJson(res, 200, lookup({ hash, docNo }));
     }
 
     sendJson(res, 404, { status: 'error', message: 'Bulunamadı.' });

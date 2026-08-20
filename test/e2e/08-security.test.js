@@ -694,7 +694,9 @@ test('Tarayıcı: gövde sınırı aşılınca 413 döner', async () => {
   }
 });
 
-test('Tarayıcı: doğrulama kaydı bağlanmadığı için SAHTE onay vermez', async () => {
+test('Tarayıcı: kayıt defteri kapalıyken SAHTE onay vermez', async () => {
+  // Bu test defteri YAPILANDIRILMAMIŞ tarayıcıyla çalışır: cevap
+  // "kullanılamıyor"dur, "geçersiz" ya da "doğrulandı" değil.
   const hash = crypto.randomBytes(32).toString('hex');
   const r = await scan('/api/verify', {
     method: 'POST',
@@ -702,7 +704,7 @@ test('Tarayıcı: doğrulama kaydı bağlanmadığı için SAHTE onay vermez', a
     body: JSON.stringify({ hash })
   });
   assert.strictEqual(r.status, 200);
-  assert.strictEqual(r.json.status, 'unverified',
+  assert.strictEqual(r.json.status, 'unavailable',
     'kayıt yokken "doğrulandı" demek, hiç cevap vermemekten kötüdür');
   assert.strictEqual(r.json.documentId, hash);
 });

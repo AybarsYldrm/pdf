@@ -50,7 +50,8 @@ fitfak-belge/
 │   ├── pdf-scene/    @fitfak/pdf-scene  [YENİ]    serbest yerleşimli sahne modeli
 │   ├── paper/        @fitfak/paper      [YENİ]    baskıya-öncelikli CSS tasarım sistemi
 │   ├── stamp/        @fitfak/stamp      [YENİ]    damga şablon motoru (pades'ten ayrılır)
-│   └── verify/       @fitfak/verify     [YENİ]    imza doğrulama + ETSI raporu
+│   ├── verify/       @fitfak/verify     [YENİ]    imza doğrulama + ETSI raporu
+│   └── registry/     @fitfak/registry   [YENİ]    eklemeli doğrulama kaydı
 │
 ├── apps/
 │   ├── studio/                          [YENİ]    vanilla JS web arayüzü
@@ -102,10 +103,11 @@ Bağımlılık **yalnızca aşağı doğru** akar. Yukarı ok yoktur; döngü yo
 | `stamp` | `pdf`, `qr` |
 | `pdf-doc` | `pdf` |
 | `pdf-html` | `pdf`, `paper` |
-| `pdf-scene` | `pdf`, `pdf-html`, `qr` |
+| `pdf-scene` | `pdf`, `pdf-html`, `qr`, `conformance` |
 | `paper` | (yok — saf CSS + şema) |
 | `pades` | `ssl`, `pdf-doc`, `stamp` |
 | `verify` | `ssl`, `pdf-doc` |
+| `registry` | (yok) |
 
 ---
 

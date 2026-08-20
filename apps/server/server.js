@@ -31,6 +31,7 @@ const p12 = require('@fitfak/pkcs12');
 const pdfDoc = require('@fitfak/pdf-doc');
 const conformance = require('@fitfak/conformance');
 const scene = require('@fitfak/pdf-scene');
+const { Registry, documentHash, recordFromReport } = require('@fitfak/registry');
 const policy = require('./src/policy');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -72,6 +73,62 @@ const sessions = new Map();
  * işletmecinin bunu tahmin etmesi gerekmesin.
  */
 const rateLimiter = new policy.RateLimiter();
+
+/* ------------------------------------------------------------------ */
+/* Doğrulama kaydı                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * İmzalanan belgelerin eklemeli kaydı.
+ *
+ * Karekod tarayıcısı elinde yalnız bir ÖZET tutar; belgeyi görmediği için
+ * imzayı kendisi doğrulayamaz. Defter, imza ANINDA yapılan doğrulamanın
+ * sonucunu saklar ve tarayıcı onu okur.
+ *
+ * `REGISTRY_DIR` verilmezse defter KAPALIDIR ve tarayıcı dürüstçe
+ * "kayıt yok" der. Kapalı bir defteri açıkmış gibi göstermek, tam olarak
+ * kaçındığımız şeydir.
+ */
+const registry = new Registry({
+  dir: process.env.REGISTRY_DIR || '',
+  key: process.env.REGISTRY_KEY || ''
+});
+
+/**
+ * İmzalanan belgeyi deftere yazar.
+ *
+ * Kayıt, imzanın KENDİSİ doğrulandıktan sonra yazılır: "imzalandı" ile
+ * "geçerli imzalandı" farklı şeylerdir ve deftere yazılması gereken
+ * ikincisidir. Doğrulama başarısız olsa bile kayıt yazılır — sonucu
+ * `indication` alanında durur; başarısızlığı gizlemek, defteri işe
+ * yaramaz kılardı.
+ */
+async function recordSignature(pdf, o = {}) {
+  if (!registry.enabled) return null;
+  try {
+    const report = await verifyPdf(pdf, {
+      trustAnchors: policy.trustAnchors(),
+      allowNetwork: false
+    });
+    const entry = recordFromReport(report, {
+      documentHash: documentHash(pdf),
+      docNo: o.docNo,
+      level: o.level
+    });
+    const written = registry.append(entry);
+    policy.auditLog({
+      event: 'registry', outcome: 'recorded',
+      seq: written.seq, indication: entry.indication
+    });
+    return { seq: written.seq, documentHash: entry.documentHash };
+  } catch (err) {
+    // Defter yazılamıyorsa imza yine de geçerlidir: kullanıcıya belgeyi
+    // vermemek orantısız olurdu. Ama sessiz kalınmaz.
+    console.warn('[kayıt defteri] yazılamadı:', err.message);
+    policy.auditLog({ event: 'registry', outcome: 'failed', error: err.code || 'ERR' });
+    return null;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Font kayıt defteri                                                   */
@@ -266,6 +323,8 @@ const routes = {
       remoteAssets: policy.REMOTE.enabled,
       // Sayaç nerede duruyor? "Sınır var" demek yetmez; sınırın kaç süreçte
       // geçerli olduğu da bilinmelidir.
+      // Defter açık mı, zinciri sağlam mı? "Doğrulama var" demek yetmez.
+      registry: registry.describe(),
       rateLimit: {
         windowMs: policy.RATE.windowMs,
         maxRequests: policy.RATE.maxRequests,
@@ -654,7 +713,9 @@ const routes = {
       writer, prepared, fieldName,
       level: (body.level || 'T').toUpperCase(),
       certPem: body.certPem,
-      chainPems: body.chainPems || []
+      chainPems: body.chainPems || [],
+      // Belge numarası karekodun içindedir; defter kaydı onunla aranabilsin.
+      docNo: (body.visible && body.visible.docNo) || body.docNo || ''
     });
 
     sendJson(res, 200, {
@@ -730,12 +791,17 @@ const routes = {
       }
     }
 
+    const recorded = await recordSignature(pdf, {
+      docNo: session.docNo, level: achieved
+    });
+
     sendJson(res, 200, {
       pdf: b64(pdf),
       requestedLevel: session.level,
       achievedLevel: achieved,
       reasons,
-      ltvReport
+      ltvReport,
+      registry: recorded
     });
   },
 
@@ -767,12 +833,18 @@ const routes = {
         ltv: { prefer: 'ocsp-first' }
       });
 
+      const recorded = await recordSignature(result.pdf, {
+        docNo: (body.visible && body.visible.docNo) || body.docNo,
+        level: result.achievedLevel
+      });
+
       sendJson(res, 200, {
         pdf: b64(result.pdf),
         requestedLevel: result.requestedLevel,
         achievedLevel: result.achievedLevel,
         reasons: result.reasons,
-        ltvReport: result.ltvReport || null
+        ltvReport: result.ltvReport || null,
+        registry: recorded
       });
     } finally {
       pfx.fill(0);                       // parolayı ve anahtarı bellekte bırakma

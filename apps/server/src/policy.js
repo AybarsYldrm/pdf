@@ -303,6 +303,38 @@ function clientKey(req) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Güven çapaları                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sunucunun kendi doğrulamalarında kullandığı kök sertifikalar.
+ *
+ * `TRUST_ANCHORS` virgülle ayrılmış PEM dosya yollarıdır. TANIMLI DEĞİLSE
+ * BOŞ DÖNER — ve bu, doğrulamanın "güvenilir zincir" diyememesi demektir.
+ * Sistemin kök deposunu sessizce kullanmak, hangi köke güvenildiğini
+ * belirsiz bırakırdı; imza doğrulamasında belirsizlik kabul edilemez.
+ */
+let _anchors = null;
+
+function trustAnchors() {
+  if (_anchors) return _anchors;
+
+  const list = (process.env.TRUST_ANCHORS || '').split(',')
+    .map((p) => p.trim()).filter(Boolean);
+
+  const out = [];
+  for (const file of list) {
+    try {
+      out.push(require('fs').readFileSync(file, 'utf8'));
+    } catch (err) {
+      console.warn(`[güven çapası] okunamadı: ${file} (${err.message})`);
+    }
+  }
+  _anchors = out;
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* Denetim günlüğü                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -329,5 +361,5 @@ module.exports = {
   LIMITS, RATE, REMOTE, AUTH, PolicyError,
   checkBytes, checkCount, checkPdf,
   authorize, authEnabled, classify, clientKey, presentedToken, tokenValid,
-  RateLimiter, auditLog
+  RateLimiter, auditLog, trustAnchors
 };

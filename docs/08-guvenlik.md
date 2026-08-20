@@ -204,6 +204,15 @@ uyarı basar.
 | **Düzeltme** | Depo arayüzü ayrıldı. `RATE_LIMIT_DIR` tanımlıysa sayaçlar dosyada paylaşılır ve aynı makinedeki bütün süreçler aynı sayacı görür. Anahtar dosya adına çevrilmez, SHA-256 ile özetlenir (dizin dışına çıkma yüzeyi kalmasın). Depo yazamazsa süreç içi sayaca düşülür — **sessizce serbest bırakılmaz**: başarısızlık sayılır ve `/api/health` içinde bildirilir. |
 | **Test** | `test/unit/ratelimit.test.js` — 19 test (paylaşım GERÇEK ayrı süreçlerle sınanır) |
 
+### G-17 · Yüksek · Tarayıcı doğrulama yapmadan cevap veriyordu
+
+| | |
+|---|---|
+| **Dosya** | `packages/registry/` (yeni), `apps/scanner/server.js`, `apps/server/server.js` |
+| **Sorun** | G-11'de sahte "doğrulandı" cevabı kaldırılmıştı ama yerine bir şey konmamıştı: uç her belge için "kayıtlı değil" diyordu. |
+| **Düzeltme** | İmza atıldığında belge, `@fitfak/verify` ile doğrulanır ve sonucu **eklemeli, HMAC zincirli** bir deftere yazılır (`REGISTRY_DIR` + `REGISTRY_KEY`). Tarayıcı defteri YALNIZ OKUR. Cevaplar birbirine karıştırılmaz: `unavailable` (defter yok/bozuk), `unverified` (kayıtlı değil), `indeterminate` (karar verilemedi), `invalid` (geçersizdi), `verified`. Defterin zinciri bozuksa **hiçbir kayıt kanıt sayılmaz**. Belgenin kendisi deftere yazılmaz: defter arşiv değildir. |
+| **Test** | `test/unit/registry.test.js` (17) · `test/e2e/10-registry.test.js` (9, iki ayrı sunucu tek defter) |
+
 ---
 
 ## 3. Yapılmayanlar ve gerekçeleri
@@ -224,8 +233,16 @@ sunulmamalıdır.
   (secret manager) kullanılmıyor.
 - **Uzak kaynaklar VARSAYILAN OLARAK KAPALIDIR.** `REMOTE_ASSET_HOSTS` ile
   bir izin listesi verilmeden açılamaz (bkz. G-14).
-- **Tarayıcı `/api/verify` ucu gerçek bir doğrulama yapmaz.** Zincir/kayıt
-  bağlantısı kurulmamıştır ve uç bunu açıkça söyler.
+- **Tarayıcı KAYDA bakar, belgeye değil.** Karekod yalnız bir özet/numara
+  taşır; belgenin kendisi tarayıcıda yoktur. Cevap "imza ATILDIĞI ANDA
+  şuydu" bilgisidir. Sertifika o tarihten sonra iptal edilmişse kayıt bunu
+  bilmez ve cevap bunu açıkça söyler (`scope` alanı).
+- **Kayıt defteri tek makinede bir dosyadır.** Zincir HMAC'lidir ve
+  kurcalanma yakalanır ama defterin YEDEĞİ ve çoğaltılması işletmenin
+  işidir. Defter silinirse kayıtlar da gider — silinmiş kayıt "kayıtlı
+  değil" cevabı üretir, sahte bir onay değil.
+- **`REGISTRY_KEY` düz metin ortam değişkenindedir.** Anahtarı ele geçiren
+  biri geçerli kayıt üretebilir.
 
 ---
 
@@ -239,6 +256,8 @@ sunulmamalıdır.
 | `test/unit/netguard.test.js` | 32 | SSRF: özel ağ blokları, IPv4-eşlemeli IPv6, yönlendirme |
 | `test/unit/crl.test.js` | 27 | RFC 5280 CRL kapsamı, delta, neden kodları |
 | `test/unit/ratelimit.test.js` | 19 | Hız sınırı depoları, süreçler arası paylaşım |
+| `test/unit/registry.test.js` | 17 | Kayıt defteri: kurcalama, zincir kopması, kilit |
+| `test/e2e/10-registry.test.js` | 9 | İmza → kayıt → tarayıcı zinciri |
 
 Yardımcı: `test/e2e/helpers/rogue-tsa.js` — kuralları kasten çiğneyen ama
 yapısal olarak geçerli bir RFC 3161 jetonu üretir. Kendi TSA sunucumuz böyle
