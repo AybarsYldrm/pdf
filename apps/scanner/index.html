@@ -2,1079 +2,2514 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>QR Scanner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR Decoder v4 — Vanilla JS</title>
 <style>
-  :root {
-    --bg: #0f172a;
-    --surface: #1e293b;
-    --border: #334155;
-    --primary: #38bdf8;
-    --success: #22c55e;
-    --error: #ef4444;
-    --warn: #f59e0b;
-    --text: #f1f5f9;
-    --muted: #94a3b8;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg:#f4f4f4; --line:#888; --ink:#111; }
+  * { box-sizing: border-box; }
   body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: system-ui, -apple-system, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 20px 16px 40px;
-    gap: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 12px; background: var(--bg); color: var(--ink);
+    max-width: 1100px; margin-inline: auto;
   }
-  h1 { font-size: 1.1rem; font-weight: 600; color: var(--primary); }
-  p.sub { font-size: 0.8rem; color: var(--muted); }
-
-  .scanner-wrap {
-    position: relative;
-    width: 100%;
-    max-width: 340px;
-    aspect-ratio: 1/1;
-    background: #000;
-    border-radius: 20px;
-    overflow: hidden;
-    border: 1px solid var(--border);
+  h1 { font-size: 1.15rem; margin: 0 0 4px; }
+  .sub { font-size: .78rem; color: #555; margin-bottom: 10px; }
+  #status-bar {
+    background: #fff; border: 1px solid var(--line); padding: 8px 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .8rem; margin-bottom: 10px;
   }
-  #video { width: 100%; height: 100%; object-fit: cover; display: block; }
-
-  /* köşe bracket overlay */
-  .corner { position: absolute; width: 28px; height: 28px; border-color: var(--primary); border-style: solid; }
-  .corner.tl { top: 16px; left: 16px; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
-  .corner.tr { top: 16px; right: 16px; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
-  .corner.bl { bottom: 16px; left: 16px; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
-  .corner.br { bottom: 16px; right: 16px; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
-
-  .scan-line {
-    position: absolute; left: 10%; right: 10%; height: 2px;
-    background: var(--primary);
-    box-shadow: 0 0 8px var(--primary);
-    animation: sweep 2s ease-in-out infinite;
-    display: none;
-  }
-  @keyframes sweep {
-    0%   { top: 10%; opacity: 0; }
-    8%   { opacity: 1; }
-    92%  { opacity: 1; }
-    100% { top: 90%; opacity: 0; }
-  }
-
-  /* başarı flash */
-  .flash {
-    position: absolute; inset: 0;
-    background: rgba(34,197,94,0.3);
-    display: none;
-    align-items: center;
-    justify-content: center;
-  }
-  .flash.show { display: flex; animation: flashIn 0.25s ease; }
-  @keyframes flashIn { from { opacity: 0; } to { opacity: 1; } }
-  .flash-icon {
-    width: 64px; height: 64px; border-radius: 50%;
-    background: var(--success);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 2rem;
-  }
-
-  .status-box {
-    width: 100%; max-width: 340px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 12px 16px;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    min-height: 52px;
-    color: var(--muted);
-    transition: border-color 0.2s, color 0.2s;
-  }
-  .status-box.ok    { color: var(--success); border-color: var(--success); }
-  .status-box.err   { color: var(--error);   border-color: var(--error); }
-  .status-box.busy  { color: var(--warn);    border-color: var(--warn); }
-
-  .btn-row { display: flex; gap: 10px; width: 100%; max-width: 340px; }
+  fieldset { border: 1px solid var(--line); background: #fff; margin: 0 0 10px; padding: 10px; }
+  legend { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 0 5px; }
   button {
-    flex: 1; padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
-    color: var(--text);
-    font-size: 0.95rem; font-weight: 600;
-    cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+    font-family: inherit; font-size: .82rem; padding: 7px 13px; margin: 3px 4px 3px 0;
+    border: 1px solid var(--line); background: #fff; cursor: pointer; border-radius: 3px;
   }
-  button:active { transform: scale(0.97); }
-  button.primary { background: var(--primary); color: var(--bg); border-color: var(--primary); }
-  button:disabled { opacity: 0.35; cursor: not-allowed; }
-
-  /* Dosya seçici düğme gibi görünmeli: <input type=file> biçimlendirilemez,
-     bu yüzden görünür olan <label>'dır ve girdi gizlidir. */
-  .file-btn {
-    flex: 1; padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
-    color: var(--text);
-    font-size: 0.95rem; font-weight: 600;
-    text-align: center; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
+  button:hover:not(:disabled) { background: #eaeaea; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  label.opt { font-size: .78rem; margin-left: 10px; white-space: nowrap; }
+  .file-row { margin-top: 6px; font-size: .78rem; }
+  .canvases { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 720px) { .canvases { grid-template-columns: 1fr; } }
+  .pane { border: 1px solid var(--line); background: #fff; padding: 8px; }
+  .pane h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 6px; }
+  video, canvas { width: 100%; display: block; background: #000; border: 1px solid #ccc; }
+  #hidden-canvas { display: none; }
+  #debug-canvas { background: #fff; image-rendering: pixelated; }
+  .legend { font-size: .7rem; margin-top: 6px; line-height: 1.6; }
+  .sw { display: inline-block; width: 10px; height: 10px; margin-right: 3px; vertical-align: -1px; border: 1px solid #0003; }
+  #result-box {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem;
+    background: #fff; border: 1px solid var(--line); padding: 9px; min-height: 2.4em;
+    word-break: break-all; white-space: pre-wrap;
   }
-  .file-btn:active { transform: scale(0.97); }
-
-  /* Karekod taramasının NE KANITLADIĞINI söyleyen not. */
-  .hint {
-    width: 100%; max-width: 340px;
-    margin: 0; font-size: 0.75rem; line-height: 1.5;
-    color: var(--muted);
+  #debug-log {
+    width: 100%; height: 300px; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .7rem; line-height: 1.45; border: 1px solid #ccc; padding: 7px;
+    background: #fbfbfb; resize: vertical;
   }
-
-  .history { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 8px; }
-  .history h2 { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-  .hist-item {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 14px;
-    font-size: 0.8rem;
-    word-break: break-all;
-    line-height: 1.5;
-  }
-  .hist-item .ht { color: var(--muted); font-size: 0.7rem; margin-bottom: 3px; }
-  .hist-item .hv { color: var(--text); }
-
-  /* Canvas arka planda çalışır, UI'ı bozmaz */
-  canvas { display: none; }
-  #dbg { font-size: 0.7rem; color: var(--muted); font-family: monospace; max-width: 340px; word-break: break-all; display: none; }
 </style>
 </head>
 <body>
 
-<h1>QR Tarayıcı</h1>
-<p class="sub">Saf JS · Kütüphanesiz · PoA Ağ Geçidi</p>
+<h1>QR Decoder v4 — Vanilla JavaScript</h1>
+<div class="sub">Harici kütüphane yok. GF(256) · Reed-Solomon (BM + Chien + Forney) · BCH(15,5) / BCH(18,6) · Perspektif homography · Versiyon 1–40, EC L/M/Q/H.</div>
 
-<div class="scanner-wrap">
-  <video id="video" autoplay playsinline muted></video>
-  <div class="corner tl"></div>
-  <div class="corner tr"></div>
-  <div class="corner bl"></div>
-  <div class="corner br"></div>
-  <div class="scan-line" id="scan-line"></div>
-  <div class="flash" id="flash"><div class="flash-icon">✓</div></div>
-</div>
-<canvas id="canvas"></canvas>
+<div id="status-bar">Durum: başlatılıyor…</div>
 
-<div class="status-box" id="status">Kamera kapalı. Başlamak için düğmeye basın.</div>
+<fieldset>
+  <legend>Kontrol Paneli</legend>
+  <button id="btn-start">Kamerayı Aç</button>
+  <button id="btn-stop">Durdur</button>
+  <button id="btn-clear">Logları Temizle</button>
+  <button id="btn-retest">Self-Test'i Tekrar Çalıştır</button>
+  <label class="opt"><input type="checkbox" id="chk-verbose"> Ayrıntılı pipeline logu</label>
+  <label class="opt"><input type="checkbox" id="chk-native" checked> Yerleşik BarcodeDetector'ı kullan</label>
+  <div class="file-row">
+    <label for="file-input">Görüntü dosyasından çöz:</label>
+    <input type="file" id="file-input" accept="image/*">
+  </div>
+</fieldset>
 
-<div class="btn-row">
-  <button class="primary" id="btn-cam" onclick="toggleCamera()">Kamerayı Aç</button>
-  <label class="file-btn" for="pdf-input">Dosyayı Doğrula</label>
-  <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden
-         onchange="verifyFile(this.files[0]); this.value='';">
-  <button id="btn-clear" onclick="clearHistory()" disabled>Temizle</button>
-</div>
-
-<!--
-  KAREKOD BİR KANIT DEĞİLDİR: üzerinde durduğu belgeyle arasında hiçbir bağ
-  yoktur. Gerçek bir belgenin karekodunu kesip sahtesine yapıştıran biri,
-  yalnız kimliğe bakan bir taramadan "doğrulandı" alır. Kesin bağ ancak
-  dosyanın kendisinden hesaplanan özetle kurulur — bu yüzden bu düğme var.
--->
-<p class="hint" id="binding-hint">
-  Kamerayla tarama yalnız <b>karekoddaki kimliği</b> sorgular; elinizdeki
-  dosyanın o belge olduğunu kanıtlamaz. Kesin sonuç için dosyayı yükleyin.
-</p>
-
-<div class="history" id="history" style="display:none">
-  <h2>Tarihçe</h2>
-  <div id="hist-list"></div>
+<div class="canvases">
+  <div class="pane">
+    <h2>Kamera</h2>
+    <video id="video" playsinline muted></video>
+    <canvas id="hidden-canvas"></canvas>
+  </div>
+  <div class="pane">
+    <h2>Debug — Binarize Matris</h2>
+    <canvas id="debug-canvas" width="320" height="320"></canvas>
+    <div class="legend">
+      <span class="sw" style="background:#ff0000"></span>finder adayları &nbsp;
+      <span class="sw" style="background:#00c000"></span>seçilen finder üçgeni &nbsp;
+      <span class="sw" style="background:#0060ff"></span>tahmin edilen QR köşeleri &nbsp;
+      <span class="sw" style="background:#ffdc00"></span>düşük güvenli modüller
+    </div>
+  </div>
 </div>
 
-<div id="dbg"></div>
+<fieldset>
+  <legend>Çözülen İçerik</legend>
+  <div id="result-box">—</div>
+</fieldset>
+
+<fieldset>
+  <legend>Sistem Logları</legend>
+  <textarea id="debug-log" readonly spellcheck="false"></textarea>
+</fieldset>
 
 <script>
+'use strict';
+(function(){
 /* ============================================================
-   VANILLA JS QR DECODER  —  tam pipeline:
-   1. Görüntü ikili (binarize)
-   2. Finder pattern tespiti
-   3. Perspektif dönüşümü (homografi)
-   4. Bit sampling
-   5. Format bilgisi decode (mask + EC)
-   6. Veri bitleri unmask + parse
-   7. Reed-Solomon hata düzeltmesi
-   8. UTF-8 / Byte / Numeric / Alphanum mode decode
+   BÖLÜM 1 — GF(256) ARİTMETİĞİ ve REED-SOLOMON
+   Primitive polynomial: 0x11D  (x^8 + x^4 + x^3 + x^2 + 1)
+   QR konvansiyonu: generator kökleri a^0, a^1, ... a^(n-1)  (b = 0)
    ============================================================ */
 
-const QRDecoder = (() => {
+const GF_EXP = new Uint8Array(512);
+const GF_LOG = new Int16Array(256).fill(-1);
+(function buildTables() {
+  let x = 1;
+  for (let i = 0; i < 255; i++) {
+    GF_EXP[i] = x;
+    GF_LOG[x] = i;
+    x <<= 1;
+    if (x & 0x100) x ^= 0x11d;
+  }
+  for (let i = 255; i < 512; i++) GF_EXP[i] = GF_EXP[i - 255];
+})();
 
-  /* ── GF(256) aritmetiği ── */
-  const GF_EXP = new Uint8Array(512);
-  const GF_LOG = new Uint8Array(256);
-  (() => {
-    let v = 1;
-    for (let i = 0; i < 255; i++) {
-      GF_EXP[i] = v; GF_LOG[v] = i;
-      v <<= 1; if (v & 0x100) v ^= 0x11d;
+function gfMul(a, b) {
+  if (a === 0 || b === 0) return 0;
+  return GF_EXP[GF_LOG[a] + GF_LOG[b]];
+}
+function gfDiv(a, b) {
+  if (b === 0) throw new Error('GF256: sıfıra bölme');
+  if (a === 0) return 0;
+  return GF_EXP[(GF_LOG[a] - GF_LOG[b] + 255) % 255];
+}
+function gfInv(a) {
+  if (a === 0) throw new Error('GF256: 0 tersi yok');
+  return GF_EXP[(255 - GF_LOG[a]) % 255];
+}
+function gfPow(a, n) {
+  if (a === 0) return n === 0 ? 1 : 0;
+  return GF_EXP[(((GF_LOG[a] * n) % 255) + 255) % 255];
+}
+
+/* Polinomlar "yüksek dereceli katsayı önce" (big-endian) saklanır. */
+function polyEval(p, x) {
+  let y = 0;
+  for (let i = 0; i < p.length; i++) y = gfMul(y, x) ^ p[i];
+  return y;
+}
+function polyMul(a, b) {
+  const r = new Uint8Array(a.length + b.length - 1);
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === 0) continue;
+    for (let j = 0; j < b.length; j++) {
+      if (b[j] === 0) continue;
+      r[i + j] ^= gfMul(a[i], b[j]);
     }
-    for (let i = 255; i < 512; i++) GF_EXP[i] = GF_EXP[i - 255];
-  })();
-
-  const gfMul = (a, b) => (a && b) ? GF_EXP[(GF_LOG[a] + GF_LOG[b]) % 255] : 0;
-  const gfDiv = (a, b) => { if (!b) throw new Error('GF div/0'); return a ? GF_EXP[(GF_LOG[a] - GF_LOG[b] + 255) % 255] : 0; };
-  const gfPow = (x, p) => GF_EXP[(GF_LOG[x] * p) % 255];
-  const gfInv = x => GF_EXP[255 - GF_LOG[x]];
-
-  function gfPolyMul(p, q) {
-    const r = new Uint8Array(p.length + q.length - 1);
-    for (let i = 0; i < p.length; i++)
-      for (let j = 0; j < q.length; j++)
-        r[i + j] ^= gfMul(p[i], q[j]);
-    return r;
   }
-  function gfPolyEval(p, x) {
-    let y = 0;
-    for (let i = 0; i < p.length; i++) y = gfMul(y, x) ^ p[i];
-    return y;
+  return r;
+}
+
+const _genCache = new Map();
+function rsGenerator(nsym) {
+  if (_genCache.has(nsym)) return _genCache.get(nsym);
+  let g = new Uint8Array([1]);
+  for (let i = 0; i < nsym; i++) g = polyMul(g, new Uint8Array([1, GF_EXP[i]]));
+  _genCache.set(nsym, g);
+  return g;
+}
+
+/** data (Uint8Array/array) -> nsym adet EC codeword döner. */
+function rsEncode(data, nsym) {
+  const g = rsGenerator(nsym);
+  const res = new Uint8Array(data.length + nsym);
+  res.set(data, 0);
+  for (let i = 0; i < data.length; i++) {
+    const c = res[i];
+    if (c === 0) continue;
+    for (let j = 1; j < g.length; j++) res[i + j] ^= gfMul(g[j], c);
   }
+  return res.slice(data.length);
+}
 
-  /* ── Reed-Solomon düzeltici ── */
-  function rsCorrect(msg, nsym) {
-    const synd = new Uint8Array(nsym);
-    for (let i = 0; i < nsym; i++) synd[i] = gfPolyEval(msg, GF_EXP[i]);
-    if (synd.every(s => !s)) return msg;
+/**
+ * Berlekamp-Massey + Chien search + Forney.
+ * @returns {{ok:boolean, data?:Uint8Array, errors?:number, reason?:string}}
+ * Asla exception atmaz — kontrollü sonuç döner.
+ */
+function rsDecode(msgIn, nsym) {
+  const msg = Uint8Array.from(msgIn);
+  const L = msg.length;
+  if (nsym <= 0) return { ok: true, data: msg, errors: 0 };
+  if (L > 255) return { ok: false, reason: 'blok 255 byte üstü' };
 
-    let C = new Uint8Array([1]), B = new Uint8Array([1]);
-    let L = 0, m = 1, b = 1;
-    for (let i = 0; i < nsym; i++) {
-      let d = synd[i];
-      for (let j = 1; j <= L; j++) d ^= gfMul(C[j] || 0, synd[i - j]);
-      if (!d) { m++; continue; }
-      const T = new Uint8Array(C);
-      const coef = gfDiv(d, b);
-      const shift = new Uint8Array(m + B.length);
-      for (let j = 0; j < B.length; j++) shift[j + m] = gfMul(B[j], coef);
-      const nc = new Uint8Array(Math.max(C.length, shift.length));
-      for (let j = 0; j < nc.length; j++) nc[j] = (C[j] || 0) ^ (shift[j] || 0);
-      if (2 * L <= i) { L = i + 1 - L; B = T; b = d; m = 1; } else m++;
-      C = nc;
+  /* --- 1. Sendromlar: S_j = C(a^j), j = 0..nsym-1 --- */
+  const S = new Uint8Array(nsym);
+  let nonZero = false;
+  for (let j = 0; j < nsym; j++) {
+    S[j] = polyEval(msg, GF_EXP[j]);
+    if (S[j] !== 0) nonZero = true;
+  }
+  if (!nonZero) return { ok: true, data: msg, errors: 0 };
+
+  /* --- 2. Berlekamp-Massey: hata konum polinomu Λ(x) (küçük dereceli katsayı önce) --- */
+  let C = [1];      // Λ
+  let B = [1];      // önceki Λ
+  let l = 0, m = 1, b = 1;
+
+  for (let n = 0; n < nsym; n++) {
+    let d = S[n];
+    for (let i = 1; i <= l; i++) {
+      if (i < C.length) d ^= gfMul(C[i], S[n - i]);
     }
+    if (d === 0) { m++; continue; }
 
-    const errLoc = [];
-    for (let i = 0; i < 256; i++) {
-      if (!gfPolyEval(C, GF_EXP[i])) errLoc.push(255 - i);
+    const need = B.length + m;
+    const oldC = C.slice();
+    if (C.length < need) { while (C.length < need) C.push(0); }
+    const coef = gfDiv(d, b);
+    for (let i = 0; i < B.length; i++) C[m + i] ^= gfMul(coef, B[i]);
+
+    if (2 * l <= n) {
+      l = n + 1 - l;
+      B = oldC;
+      b = d;
+      m = 1;
+    } else {
+      m++;
     }
-    if (errLoc.length !== L) throw new Error('RS: konum sayısı uyuşmuyor');
+  }
+  while (C.length > 1 && C[C.length - 1] === 0) C.pop();
+  const deg = C.length - 1;
+  if (deg !== l) return { ok: false, reason: `Λ derecesi tutarsız (deg=${deg}, L=${l})` };
+  if (l === 0) return { ok: false, reason: 'sendrom sıfır değil ama Λ boş' };
+  if (2 * l > nsym) return { ok: false, reason: `hata sayısı kapasiteyi aşıyor (${l} > ${nsym >> 1})` };
 
-    const corrected = new Uint8Array(msg);
-    for (const pos of errLoc) {
-      if (pos >= msg.length) throw new Error('RS: konum aralık dışı');
-      let xi = GF_EXP[pos];
-      let xi_inv = gfInv(xi);
-      let err_loc_prime = 1;
-      for (const other of errLoc) {
-        if (other !== pos) err_loc_prime = gfMul(err_loc_prime, xi ^ GF_EXP[other]);
-      }
-      const omega = gfPolyEval(synd.slice().reverse(), xi_inv);
-      const magnitude = gfDiv(gfMul(gfPow(xi_inv, 1), omega), err_loc_prime);
-      corrected[pos] ^= magnitude;
+  /* --- 3. Chien search: Λ(a^-i) = 0 olan i konumları --- */
+  const lamHi = C.slice().reverse();   // polyEval için big-endian
+  const positions = [];
+  for (let i = 0; i < L; i++) {
+    if (polyEval(lamHi, GF_EXP[(255 - (i % 255)) % 255]) === 0) positions.push(i);
+  }
+  if (positions.length !== l) {
+    return { ok: false, reason: `Chien: ${positions.length} kök bulundu, ${l} bekleniyordu` };
+  }
+
+  /* --- 4. Forney: Ω(x) = S(x)·Λ(x) mod x^nsym --- */
+  const omega = new Uint8Array(nsym);
+  for (let i = 0; i < nsym; i++) {
+    let s = 0;
+    for (let j = 0; j <= i; j++) {
+      if (j < C.length) s ^= gfMul(S[i - j], C[j]);
     }
-    return corrected;
+    omega[i] = s;
   }
+  const omHi = omega.slice().reverse();
 
-  /* ── Görüntü ikili dönüşümü (adaptive threshold) ── */
-  function binarize(data, w, h) {
-    const gray = new Uint8Array(w * h);
-    for (let i = 0; i < gray.length; i++) {
-      const p = i * 4;
-      gray[i] = (data[p] * 77 + data[p+1] * 150 + data[p+2] * 29) >> 8;
+  const out = Uint8Array.from(msg);
+  for (const i of positions) {
+    const Xi = GF_EXP[i % 255];
+    const Xinv = gfInv(Xi);
+    const num = polyEval(omHi, Xinv);
+    // b = 0 olduğu için: e = Ω(X^-1) / Π_{j≠i}(1 - X_j·X_i^-1)
+    let den = 1;
+    for (const j of positions) {
+      if (j === i) continue;
+      den = gfMul(den, 1 ^ gfMul(GF_EXP[j % 255], Xinv));
     }
-    const bin = new Uint8Array(w * h);
-    const hs = 7;
-    const integralSum = new Int32Array(w * h);
-    const integralCnt = new Int32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        integralSum[i] = gray[i]
-          + (x > 0 ? integralSum[i-1] : 0)
-          + (y > 0 ? integralSum[i-w] : 0)
-          - (x > 0 && y > 0 ? integralSum[i-w-1] : 0);
-        integralCnt[i] = 1
-          + (x > 0 ? integralCnt[i-1] : 0)
-          + (y > 0 ? integralCnt[i-w] : 0)
-          - (x > 0 && y > 0 ? integralCnt[i-w-1] : 0);
-      }
+    if (den === 0) return { ok: false, reason: 'Forney paydası sıfır' };
+    out[L - 1 - i] ^= gfDiv(num, den);
+  }
+
+  /* --- 5. Doğrulama: düzeltilmiş kelimenin sendromları sıfır olmalı --- */
+  for (let j = 0; j < nsym; j++) {
+    if (polyEval(out, GF_EXP[j]) !== 0) {
+      return { ok: false, reason: 'düzeltme sonrası sendrom sıfırlanmadı' };
     }
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const x1 = Math.max(0, x - hs), x2 = Math.min(w-1, x + hs);
-        const y1 = Math.max(0, y - hs), y2 = Math.min(h-1, y + hs);
-        const i11 = y1 > 0 && x1 > 0 ? integralSum[(y1-1)*w+(x1-1)] : 0;
-        const i12 = y1 > 0 ? integralSum[(y1-1)*w+x2] : 0;
-        const i21 = x1 > 0 ? integralSum[y2*w+(x1-1)] : 0;
-        const i22 = integralSum[y2*w+x2];
-        const sum = i22 - i21 - i12 + i11;
-        const cnt = integralCnt[y2*w+x2]
-          - (x1>0 ? integralCnt[y2*w+(x1-1)] : 0)
-          - (y1>0 ? integralCnt[(y1-1)*w+x2] : 0)
-          + (x1>0 && y1>0 ? integralCnt[(y1-1)*w+(x1-1)] : 0);
-        bin[y*w+x] = gray[y*w+x] < (sum / cnt) * 0.85 ? 1 : 0;
-      }
+  }
+  return { ok: true, data: out, errors: positions.length };
+}
+
+/* ============================================================
+   BÖLÜM 2 — QR TABLOLARI (Versiyon 1..40, EC L/M/Q/H)
+   Format: EC_BLOCKS[version][ecLevel] = [ecCodewordsPerBlock, [[blockCount, dataCodewords], ...]]
+   Kaynak: ISO/IEC 18004 Tablo 13-22.
+   Tablodaki her satır çalışma anında geometrik toplam codeword sayısıyla
+   doğrulanır (bkz. selfTestTables) — elle yapılmış bir hata sessiz kalamaz.
+   ============================================================ */
+
+const EC_LEVELS = ['L', 'M', 'Q', 'H'];
+// Format bilgisindeki 2 bitlik EC göstergesi -> seviye adı
+const EC_BY_FORMAT_BITS = ['M', 'L', 'H', 'Q'];
+const EC_FORMAT_BITS = { L: 1, M: 0, Q: 3, H: 2 };
+
+const EC_BLOCKS = {
+  1:  { L: [7,  [[1, 19]]],            M: [10, [[1, 16]]],            Q: [13, [[1, 13]]],            H: [17, [[1, 9]]] },
+  2:  { L: [10, [[1, 34]]],            M: [16, [[1, 28]]],            Q: [22, [[1, 22]]],            H: [28, [[1, 16]]] },
+  3:  { L: [15, [[1, 55]]],            M: [26, [[1, 44]]],            Q: [18, [[2, 17]]],            H: [22, [[2, 13]]] },
+  4:  { L: [20, [[1, 80]]],            M: [18, [[2, 32]]],            Q: [26, [[2, 24]]],            H: [16, [[4, 9]]] },
+  5:  { L: [26, [[1, 108]]],           M: [24, [[2, 43]]],            Q: [18, [[2, 15], [2, 16]]],   H: [22, [[2, 11], [2, 12]]] },
+  6:  { L: [18, [[2, 68]]],            M: [16, [[4, 27]]],            Q: [24, [[4, 19]]],            H: [28, [[4, 15]]] },
+  7:  { L: [20, [[2, 78]]],            M: [18, [[4, 31]]],            Q: [18, [[2, 14], [4, 15]]],   H: [26, [[4, 13], [1, 14]]] },
+  8:  { L: [24, [[2, 97]]],            M: [22, [[2, 38], [2, 39]]],   Q: [22, [[4, 18], [2, 19]]],   H: [26, [[4, 14], [2, 15]]] },
+  9:  { L: [30, [[2, 116]]],           M: [22, [[3, 36], [2, 37]]],   Q: [20, [[4, 16], [4, 17]]],   H: [24, [[4, 12], [4, 13]]] },
+  10: { L: [18, [[2, 68], [2, 69]]],   M: [26, [[4, 43], [1, 44]]],   Q: [24, [[6, 19], [2, 20]]],   H: [28, [[6, 15], [2, 16]]] },
+  11: { L: [20, [[4, 81]]],            M: [30, [[1, 50], [4, 51]]],   Q: [28, [[4, 22], [4, 23]]],   H: [24, [[3, 12], [8, 13]]] },
+  12: { L: [24, [[2, 92], [2, 93]]],   M: [22, [[6, 36], [2, 37]]],   Q: [26, [[4, 20], [6, 21]]],   H: [28, [[7, 14], [4, 15]]] },
+  13: { L: [26, [[4, 107]]],           M: [22, [[8, 37], [1, 38]]],   Q: [24, [[8, 20], [4, 21]]],   H: [22, [[12, 11], [4, 12]]] },
+  14: { L: [30, [[3, 115], [1, 116]]], M: [24, [[4, 40], [5, 41]]],   Q: [20, [[11, 16], [5, 17]]],  H: [24, [[11, 12], [5, 13]]] },
+  15: { L: [22, [[5, 87], [1, 88]]],   M: [24, [[5, 41], [5, 42]]],   Q: [30, [[5, 24], [7, 25]]],   H: [24, [[11, 12], [7, 13]]] },
+  16: { L: [24, [[5, 98], [1, 99]]],   M: [28, [[7, 45], [3, 46]]],   Q: [24, [[15, 19], [2, 20]]],  H: [30, [[3, 15], [13, 16]]] },
+  17: { L: [28, [[1, 107], [5, 108]]], M: [28, [[10, 46], [1, 47]]],  Q: [28, [[1, 22], [15, 23]]],  H: [28, [[2, 14], [17, 15]]] },
+  18: { L: [30, [[5, 120], [1, 121]]], M: [26, [[9, 43], [4, 44]]],   Q: [28, [[17, 22], [1, 23]]],  H: [28, [[2, 14], [19, 15]]] },
+  19: { L: [28, [[3, 113], [4, 114]]], M: [26, [[3, 44], [11, 45]]],  Q: [26, [[17, 21], [4, 22]]],  H: [26, [[9, 13], [16, 14]]] },
+  20: { L: [28, [[3, 107], [5, 108]]], M: [26, [[3, 41], [13, 42]]],  Q: [30, [[15, 24], [5, 25]]],  H: [28, [[15, 15], [10, 16]]] },
+  21: { L: [28, [[4, 116], [4, 117]]], M: [26, [[17, 42]]],           Q: [28, [[17, 22], [6, 23]]],  H: [30, [[19, 16], [6, 17]]] },
+  22: { L: [28, [[2, 111], [7, 112]]], M: [28, [[17, 46]]],           Q: [30, [[7, 24], [16, 25]]],  H: [24, [[34, 13]]] },
+  23: { L: [30, [[4, 121], [5, 122]]], M: [28, [[4, 47], [14, 48]]],  Q: [30, [[11, 24], [14, 25]]], H: [30, [[16, 15], [14, 16]]] },
+  24: { L: [30, [[6, 117], [4, 118]]], M: [28, [[6, 45], [14, 46]]],  Q: [30, [[11, 24], [16, 25]]], H: [30, [[30, 16], [2, 17]]] },
+  25: { L: [26, [[8, 106], [4, 107]]], M: [28, [[8, 47], [13, 48]]],  Q: [30, [[7, 24], [22, 25]]],  H: [30, [[22, 15], [13, 16]]] },
+  26: { L: [28, [[10, 114], [2, 115]]],M: [28, [[19, 46], [4, 47]]],  Q: [28, [[28, 22], [6, 23]]],  H: [30, [[33, 16], [4, 17]]] },
+  27: { L: [30, [[8, 122], [4, 123]]], M: [28, [[22, 45], [3, 46]]],  Q: [30, [[8, 23], [26, 24]]],  H: [30, [[12, 15], [28, 16]]] },
+  28: { L: [30, [[3, 117], [10, 118]]],M: [28, [[3, 45], [23, 46]]],  Q: [30, [[4, 24], [31, 25]]],  H: [30, [[11, 15], [31, 16]]] },
+  29: { L: [30, [[7, 116], [7, 117]]], M: [28, [[21, 45], [7, 46]]],  Q: [30, [[1, 23], [37, 24]]],  H: [30, [[19, 15], [26, 16]]] },
+  30: { L: [30, [[5, 115], [10, 116]]],M: [28, [[19, 47], [10, 48]]], Q: [30, [[15, 24], [25, 25]]], H: [30, [[23, 15], [25, 16]]] },
+  31: { L: [30, [[13, 115], [3, 116]]],M: [28, [[2, 46], [29, 47]]],  Q: [30, [[42, 24], [1, 25]]],  H: [30, [[23, 15], [28, 16]]] },
+  32: { L: [30, [[17, 115]]],          M: [28, [[10, 46], [23, 47]]], Q: [30, [[10, 24], [35, 25]]], H: [30, [[19, 15], [35, 16]]] },
+  33: { L: [30, [[17, 115], [1, 116]]],M: [28, [[14, 46], [21, 47]]], Q: [30, [[29, 24], [19, 25]]], H: [30, [[11, 15], [46, 16]]] },
+  34: { L: [30, [[13, 115], [6, 116]]],M: [28, [[14, 46], [23, 47]]], Q: [30, [[44, 24], [7, 25]]],  H: [30, [[59, 16], [1, 17]]] },
+  35: { L: [30, [[12, 121], [7, 122]]],M: [28, [[12, 47], [26, 48]]], Q: [30, [[39, 24], [14, 25]]], H: [30, [[22, 15], [41, 16]]] },
+  36: { L: [30, [[6, 121], [14, 122]]],M: [28, [[6, 47], [34, 48]]],  Q: [30, [[46, 24], [10, 25]]], H: [30, [[2, 15], [64, 16]]] },
+  37: { L: [30, [[17, 122], [4, 123]]],M: [28, [[29, 46], [14, 47]]], Q: [30, [[49, 24], [10, 25]]], H: [30, [[24, 15], [46, 16]]] },
+  38: { L: [30, [[4, 122], [18, 123]]],M: [28, [[13, 46], [32, 47]]], Q: [30, [[48, 24], [14, 25]]], H: [30, [[42, 15], [32, 16]]] },
+  39: { L: [30, [[20, 117], [4, 118]]],M: [28, [[40, 47], [7, 48]]],  Q: [30, [[43, 24], [22, 25]]], H: [30, [[10, 15], [67, 16]]] },
+  40: { L: [30, [[19, 118], [6, 119]]],M: [28, [[18, 47], [31, 48]]], Q: [30, [[34, 24], [34, 25]]], H: [30, [[20, 15], [61, 16]]] }
+};
+
+/* Alignment pattern merkez koordinatları — ISO/IEC 18004 Tablo E.1.
+   v1 için yoktur. */
+const ALIGNMENT_POS = {
+  1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34],
+  7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50],
+  11: [6, 30, 54], 12: [6, 32, 58], 13: [6, 34, 62], 14: [6, 26, 46, 66],
+  15: [6, 26, 48, 70], 16: [6, 26, 50, 74], 17: [6, 30, 54, 78], 18: [6, 30, 56, 82],
+  19: [6, 30, 58, 86], 20: [6, 34, 62, 90], 21: [6, 28, 50, 72, 94], 22: [6, 26, 50, 74, 98],
+  23: [6, 30, 54, 78, 102], 24: [6, 28, 54, 80, 106], 25: [6, 32, 58, 84, 110],
+  26: [6, 30, 58, 86, 114], 27: [6, 34, 62, 90, 118], 28: [6, 26, 50, 74, 98, 122],
+  29: [6, 30, 54, 78, 102, 126], 30: [6, 26, 52, 78, 104, 130], 31: [6, 30, 56, 82, 108, 134],
+  32: [6, 34, 60, 86, 112, 138], 33: [6, 30, 58, 86, 114, 142], 34: [6, 34, 62, 90, 118, 146],
+  35: [6, 30, 54, 78, 102, 126, 150], 36: [6, 24, 50, 76, 102, 128, 154],
+  37: [6, 28, 54, 80, 106, 132, 158], 38: [6, 32, 58, 84, 110, 136, 162],
+  39: [6, 26, 54, 82, 110, 138, 166], 40: [6, 30, 58, 86, 114, 142, 170]
+};
+
+/* Versiyon 7..40 için 18 bitlik versiyon bilgisi (BCH(18,6)).
+   Çalışma anında hesaplanır, sabit tablo tutulmaz — dolayısıyla yazım hatası olamaz. */
+function versionInfoBits(version) {
+  let v = version << 12;
+  for (let i = 17; i >= 12; i--) {
+    if ((v >> i) & 1) v ^= 0x1f25 << (i - 12);
+  }
+  return (version << 12) | (v & 0xfff);
+}
+
+const FORMAT_MASK = 0b101010000010010;
+function formatInfoBits(ecFormatBits, mask) {
+  const data = ((ecFormatBits & 3) << 3) | (mask & 7);
+  let v = data << 10;
+  for (let i = 14; i >= 10; i--) {
+    if ((v >> i) & 1) v ^= 0x537 << (i - 10);
+  }
+  return (((data << 10) | (v & 0x3ff)) ^ FORMAT_MASK) & 0x7fff;
+}
+
+const sizeForVersion = v => 17 + 4 * v;
+
+const MASK_FN = [
+  (r, c) => ((r + c) % 2) === 0,
+  (r, c) => (r % 2) === 0,
+  (r, c) => (c % 3) === 0,
+  (r, c) => ((r + c) % 3) === 0,
+  (r, c) => ((Math.floor(r / 2) + Math.floor(c / 3)) % 2) === 0,
+  (r, c) => (((r * c) % 2) + ((r * c) % 3)) === 0,
+  (r, c) => (((((r * c) % 2) + ((r * c) % 3)) % 2)) === 0,
+  (r, c) => (((((r + c) % 2) + ((r * c) % 3)) % 2)) === 0
+];
+
+function popcount(n) { let c = 0; while (n) { c += n & 1; n >>>= 1; } return c; }
+
+/* ============================================================
+   BÖLÜM 3 — QR MATRİS KATMANI
+   Function module maskesi, veri gezinme (zig-zag), format/versiyon
+   bilgisi, interleaving, encoder (self-test için) ve matris decoder.
+   ============================================================ */
+
+/** Fonksiyon modülleri (veri taşımayan modüller) maskesi. v1..v40 için doğru. */
+function buildFunctionMask(version) {
+  const size = sizeForVersion(version);
+  const fm = new Uint8Array(size * size);
+  const set = (r, c) => { if (r >= 0 && r < size && c >= 0 && c < size) fm[r * size + c] = 1; };
+
+  // Finder + separator (3 köşe, 8x8 alan)
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) { set(r, c); set(r, size - 1 - c); set(size - 1 - r, c); }
+  // Format bilgisi
+  for (let i = 0; i < 9; i++) { set(8, i); set(i, 8); }
+  for (let i = 0; i < 8; i++) { set(8, size - 1 - i); set(size - 1 - i, 8); }
+  // Timing patterns
+  for (let i = 0; i < size; i++) { set(6, i); set(i, 6); }
+  // Dark module
+  set(4 * version + 9, 8);
+  // Alignment patterns (finder ile çakışan 3 konum hariç)
+  const ap = ALIGNMENT_POS[version] || [];
+  for (const ay of ap) {
+    for (const ax of ap) {
+      if ((ax === 6 && ay === 6) ||
+          (ax === 6 && ay === size - 7) ||
+          (ax === size - 7 && ay === 6)) continue;
+      for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) set(ay + dr, ax + dc);
     }
-    return bin;
   }
-
-  /* ── Finder pattern tespiti ── */
-  function findFinderCenters(bin, w, h) {
-    const centers = [];
-    const skip = 2;
-
-    for (let y = skip; y < h - skip; y += skip) {
-      let st = [0,0,0,0,0], cs = 0;
-
-      for (let x = 0; x < w; x++) {
-        const pix = bin[y * w + x];
-        if (pix === (cs & 1 ? 0 : 1)) { cs++; if (cs === 5) cs = 0; }
-        st[cs]++;
-
-        if (cs === 4 && checkRatio(st)) {
-          const tot = st[0]+st[1]+st[2]+st[3]+st[4];
-          const cx = x - st[4] - st[3] - (st[2] >> 1);
-          const cy = crossCheckV(bin, w, h, y, cx, tot);
-          if (!isNaN(cy)) {
-            const cxFine = crossCheckH(bin, w, cy|0, cx, tot);
-            if (!isNaN(cxFine)) {
-              if (!centers.some(c => Math.hypot(c.x-cxFine, c.y-cy) < st[2])) {
-                centers.push({ x: cxFine, y: cy, mod: tot / 7 });
-              }
-            }
-          }
-          st = [0,0,0,0,0]; cs = 0;
-        }
-      }
+  // Versiyon bilgisi (v7+)
+  if (version >= 7) {
+    for (let i = 0; i < 6; i++) {
+      for (let j = 0; j < 3; j++) { set(i, size - 11 + j); set(size - 11 + j, i); }
     }
-    return centers;
   }
+  return fm;
+}
 
-  /* KÜTÜPHANE OLMADAN OKUMANIN KALBİ: Esnetilmiş hata toleransı */
-  function checkRatio(s) {
-    const t = s[0]+s[1]+s[2]+s[3]+s[4];
-    if (t < 7) return false;
-    const u = t / 7;
-    const e = u * 0.75; // Gerçek dünya kamera titremesi için tolerans gevşetildi
-    return Math.abs(u-s[0])<e && Math.abs(u-s[1])<e &&
-           Math.abs(3*u-s[2])<3*e && Math.abs(u-s[3])<e && Math.abs(u-s[4])<e;
-  }
-
-  function crossCheckV(bin, w, h, ry, cx, tot) {
-    const s = [0,0,0,0,0];
-    let y = ry;
-    while (y >= 0 && bin[y*w+cx] === 1) { s[2]++; y--; }
-    while (y >= 0 && bin[y*w+cx] === 0) { s[1]++; y--; }
-    while (y >= 0 && bin[y*w+cx] === 1) { s[0]++; y--; }
-    y = ry + 1;
-    while (y < h && bin[y*w+cx] === 1) { s[2]++; y++; }
-    while (y < h && bin[y*w+cx] === 0) { s[3]++; y++; }
-    while (y < h && bin[y*w+cx] === 1) { s[4]++; y++; }
-    const t2 = s[0]+s[1]+s[2]+s[3]+s[4];
-    if (5 * Math.abs(t2-tot) >= 2*tot) return NaN;
-    if (!checkRatio(s)) return NaN;
-    return ry - s[2]/2 + (y - ry - s[4] - s[3]) / 2 + s[2]/2;
-  }
-
-  function crossCheckH(bin, w, cy, cx, tot) {
-    const s = [0,0,0,0,0];
-    let x = cx;
-    while (x >= 0 && bin[cy*w+x] === 1) { s[2]++; x--; }
-    while (x >= 0 && bin[cy*w+x] === 0) { s[1]++; x--; }
-    while (x >= 0 && bin[cy*w+x] === 1) { s[0]++; x--; }
-    x = cx + 1;
-    while (x < w && bin[cy*w+x] === 1) { s[2]++; x++; }
-    while (x < w && bin[cy*w+x] === 0) { s[3]++; x++; }
-    while (x < w && bin[cy*w+x] === 1) { s[4]++; x++; }
-    const t2 = s[0]+s[1]+s[2]+s[3]+s[4];
-    if (5 * Math.abs(t2-tot) >= 2*tot) return NaN;
-    if (!checkRatio(s)) return NaN;
-    return cx - s[2]/2 + (x - cx - s[4] - s[3]) / 2 + s[2]/2;
-  }
-
-  /* ── 3 finder'dan TL / TR / BL belirleme ── */
-  function orderFinders(pts) {
-    if (pts.length < 3) return null;
-    const [a, b, c] = pts;
-    const dAB = dist2(a,b), dBC = dist2(b,c), dCA = dist2(c,a);
-    let tl, tr, bl;
-    if (dAB >= dBC && dAB >= dCA) { tl = c; tr = a; bl = b; }
-    else if (dBC >= dAB && dBC >= dCA) { tl = a; tr = b; bl = c; }
-    else { tl = b; tr = a; bl = c; }
-    const cross = (tr.x-tl.x)*(bl.y-tl.y) - (tr.y-tl.y)*(bl.x-tl.x);
-    if (cross < 0) { const t = tr; tr = bl; bl = t; }
-    return { tl, tr, bl };
-  }
-  const dist2 = (a,b) => (a.x-b.x)**2+(a.y-b.y)**2;
-
-  /* ── Versiyon tespiti ── */
-  function estimateVersion(tl, tr, bl, modSize) {
-    const d1 = Math.sqrt(dist2(tl, tr));
-    const d2 = Math.sqrt(dist2(tl, bl));
-    const d = (d1 + d2) / 2;
-    const modules = Math.round(d / modSize);
-    const ver = Math.round((modules - 10) / 4);
-    return Math.max(1, Math.min(40, ver));
-  }
-
-  /* ── Perspektif dönüşümü (homografi) ── */
-  function computeHomography(src, dst) {
-    const A = [];
-    for (let i = 0; i < 4; i++) {
-      const [sx, sy] = src[i];
-      const [dx, dy] = dst[i];
-      A.push([-sx,-sy,-1, 0,0,0, dx*sx, dx*sy, dx]);
-      A.push([ 0,0,0, -sx,-sy,-1, dy*sx, dy*sy, dy]);
-    }
-    const h = gaussElim(A);
-    return h;
-  }
-
-  function gaussElim(A) {
-    const m = A.length, n = A[0].length;
-    for (let col = 0, row = 0; col < n - 1 && row < m; col++, row++) {
-      let maxRow = row;
-      for (let r = row+1; r < m; r++)
-        if (Math.abs(A[r][col]) > Math.abs(A[maxRow][col])) maxRow = r;
-      [A[row], A[maxRow]] = [A[maxRow], A[row]];
-      if (Math.abs(A[row][col]) < 1e-10) { row--; continue; }
-      const f = A[row][col];
-      for (let c = col; c < n; c++) A[row][c] /= f;
-      for (let r = 0; r < m; r++) {
-        if (r === row) continue;
-        const factor = A[r][col];
-        for (let c = col; c < n; c++) A[r][c] -= factor * A[row][c];
-      }
-    }
-    const h = new Array(9);
-    for (let i = 0; i < 8; i++) h[i] = A[i][8];
-    h[8] = 1;
-    return h;
-  }
-
-  function applyH(H, x, y) {
-    const w = H[6]*x + H[7]*y + H[8];
-    return [(H[0]*x + H[1]*y + H[2]) / w,
-            (H[3]*x + H[4]*y + H[5]) / w];
-  }
-
-  /* ── Bit örnekleme ── */
-  function sampleBits(bin, w, h, H, size) {
-    const grid = new Uint8Array(size * size);
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const [px, py] = applyH(H, c + 0.5, r + 0.5);
-        const xi = Math.round(px), yi = Math.round(py);
-        if (xi < 0 || xi >= w || yi < 0 || yi >= h) { grid[r*size+c] = 0; continue; }
-        grid[r*size+c] = bin[yi*w+xi];
-      }
-    }
-    return grid;
-  }
-
-  /* ── Format bilgisi ── */
-  const FORMAT_MASK = 0b101010000010010;
-
-  function readFormat(grid, size) {
-    let fmt1 = 0;
-    const pos1 = [[8,0],[8,1],[8,2],[8,3],[8,4],[8,5],[8,7],[8,8],
-                  [7,8],[5,8],[4,8],[3,8],[2,8],[1,8],[0,8]];
-    for (let i = 0; i < 15; i++) {
-      const [r,c] = pos1[i];
-      fmt1 = (fmt1 << 1) | (grid[r*size+c] & 1);
-    }
-    fmt1 ^= FORMAT_MASK;
-
-    let fmt2 = 0;
-    const pos2 = [[8, size-1],[8,size-2],[8,size-3],[8,size-4],[8,size-5],[8,size-6],[8,size-7],
-                  [size-8,8],[size-7,8],[size-6,8],[size-5,8],[size-4,8],[size-3,8],[size-2,8],[size-1,8]];
-    for (let i = 0; i < 15; i++) {
-      const [r,c] = pos2[i];
-      fmt2 = (fmt2 << 1) | (grid[r*size+c] & 1);
-    }
-    fmt2 ^= FORMAT_MASK;
-
-    for (const fmt of [fmt1, fmt2]) {
-      if (checkFormatBCH(fmt)) {
-        const ec  = (fmt >> 13) & 3;
-        const mask = (fmt >> 10) & 7;
-        return { ec, mask };
-      }
-    }
-    return bruteForceFormat(fmt1, fmt2);
-  }
-
-  function checkFormatBCH(fmt) {
-    let v = fmt;
-    const poly = 0x537;
-    for (let i = 14; i >= 10; i--) {
-      if ((v >> i) & 1) v ^= poly << (i - 10);
-    }
-    return (v & 0x3ff) === 0;
-  }
-
-  function bruteForceFormat(f1, f2) {
-    let best = null, bestErr = 99;
-    for (let ec = 0; ec < 4; ec++) {
-      for (let mask = 0; mask < 8; mask++) {
-        const data = (ec << 3) | mask;
-        let bits = data << 10;
-        let tmp = bits;
-        const poly = 0x537;
-        for (let i = 14; i >= 10; i--) {
-          if ((tmp >> i) & 1) tmp ^= poly << (i - 10);
-        }
-        const candidate = ((data << 10) | (tmp & 0x3ff)) ^ FORMAT_MASK;
-        const err = popcount(candidate ^ f1) + popcount(candidate ^ f2);
-        if (err < bestErr) { bestErr = err; best = { ec, mask }; }
-      }
-    }
-    return best;
-  }
-  const popcount = n => { let c=0; while(n) { c+=n&1; n>>=1; } return c; };
-
-  /* ── Maske fonksiyonları ── */
-  const MASK_FN = [
-    (r,c) => (r+c)%2===0,
-    (r,c) => r%2===0,
-    (r,c) => c%3===0,
-    (r,c) => (r+c)%3===0,
-    (r,c) => (Math.floor(r/2)+Math.floor(c/3))%2===0,
-    (r,c) => ((r*c)%2+(r*c)%3)===0,
-    (r,c) => (((r*c)%2+(r*c)%3)%2)===0,
-    (r,c) => (((r+c)%2+(r*c)%3)%2)===0,
-  ];
-
-  /* ── Fonksiyon modüllerini işaretle ── */
-  function buildFuncMask(size, version) {
-    const fm = new Uint8Array(size * size);
-    const mark = (r,c) => { if(r>=0&&r<size&&c>=0&&c<size) fm[r*size+c]=1; };
-    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) mark(r,c);
-    for (let r = 0; r < 9; r++) for (let c = size-8; c < size; c++) mark(r,c);
-    for (let r = size-8; r < size; r++) for (let c = 0; c < 9; c++) mark(r,c);
-    for (let i = 0; i < size; i++) { mark(6,i); mark(i,6); }
-    mark(4*version+9, 8);
-    const ap = ALIGN_POS[version];
-    for (const ay of ap) {
-      for (const ax of ap) {
-        if ((ax===6&&ay===6)||(ax===6&&ay===size-7)||(ax===size-7&&ay===6)) continue;
-        for (let dr=-2;dr<=2;dr++) for (let dc=-2;dc<=2;dc++) mark(ay+dr,ax+dc);
+/** Veri modüllerinin okuma sırası: sağ alttan başlayan 2 sütunluk zig-zag. */
+function dataModuleOrder(version) {
+  const size = sizeForVersion(version);
+  const fm = buildFunctionMask(version);
+  const order = [];
+  let upward = true;
+  for (let col = size - 1; col > 0; col -= 2) {
+    if (col === 6) col--;                       // timing sütunu atlanır
+    for (let i = 0; i < size; i++) {
+      const r = upward ? size - 1 - i : i;
+      for (let dc = 0; dc < 2; dc++) {
+        const c = col - dc;
+        if (fm[r * size + c]) continue;
+        order.push(r * size + c);
       }
     }
-    if (version >= 7) {
-      for (let r=0;r<6;r++) for (let c=size-11;c<size-8;c++) mark(r,c);
-      for (let r=size-11;r<size-8;r++) for (let c=0;c<6;c++) mark(r,c);
+    upward = !upward;
+  }
+  return { order, size, fm };
+}
+
+/** Versiyona göre toplam codeword ve remainder bit sayısı (geometriden türetilir). */
+const _capCache = new Map();
+function capacityOf(version) {
+  if (_capCache.has(version)) return _capCache.get(version);
+  const { order } = dataModuleOrder(version);
+  const totalCodewords = Math.floor(order.length / 8);
+  const remainderBits = order.length % 8;
+  const v = { dataModules: order.length, totalCodewords, remainderBits };
+  _capCache.set(version, v);
+  return v;
+}
+
+/* ---------- Format bilgisi ---------- */
+
+function formatPositions(size) {
+  // MSB (bit14) -> LSB (bit0) sırasıyla
+  const copy1 = [[8, 0], [8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 7], [8, 8],
+                 [7, 8], [5, 8], [4, 8], [3, 8], [2, 8], [1, 8], [0, 8]];
+  const copy2 = [];
+  for (let i = 0; i < 7; i++) copy2.push([size - 1 - i, 8]);
+  for (let i = 0; i < 8; i++) copy2.push([8, size - 8 + i]);
+  return { copy1, copy2 };
+}
+
+/* 32 geçerli format kelimesi (maskelenmiş hâlde) */
+const FORMAT_TABLE = (() => {
+  const t = [];
+  for (let ecBits = 0; ecBits < 4; ecBits++) {
+    for (let mask = 0; mask < 8; mask++) {
+      t.push({ ecBits, mask, bits: formatInfoBits(ecBits, mask) });
     }
-    return fm;
+  }
+  return t;
+})();
+
+/**
+ * İki format kopyasını okur, BCH(15,5) ile en yakın adayı bulur.
+ * Kod minimum uzaklığı 7 olduğu için en fazla 3 hata düzeltilebilir.
+ * @returns {{candidates:Array, copy1:number, copy2:number, best:Object|null}}
+ */
+function readFormat(matrix, size) {
+  const { copy1, copy2 } = formatPositions(size);
+  const rd = pos => {
+    let v = 0;
+    for (const [r, c] of pos) v = (v << 1) | (matrix[r * size + c] & 1);
+    return v >>> 0;
+  };
+  const f1 = rd(copy1), f2 = rd(copy2);
+
+  const scored = FORMAT_TABLE.map(e => {
+    const d1 = popcount(e.bits ^ f1);
+    const d2 = popcount(e.bits ^ f2);
+    return {
+      ec: EC_BY_FORMAT_BITS[e.ecBits],
+      mask: e.mask,
+      d1, d2,
+      dist: Math.min(d1, d2),
+      total: d1 + d2
+    };
+  }).sort((a, b) => (a.dist - b.dist) || (a.total - b.total));
+
+  const best = scored[0].dist <= 3 ? scored[0] : null;
+  return { copy1: f1, copy2: f2, best, candidates: scored, agree: popcount(f1 ^ f2) };
+}
+
+/** Versiyon bilgisi (v7+), BCH(18,6), en fazla 3 hata düzeltilir. */
+function readVersionInfo(matrix, size) {
+  const readBlock = (positions) => {
+    let v = 0;
+    for (const [r, c] of positions) v = (v << 1) | (matrix[r * size + c] & 1);
+    return v >>> 0;
+  };
+  const p1 = [], p2 = [];
+  for (let i = 17; i >= 0; i--) {
+    const a = Math.floor(i / 3), b = i % 3;
+    p1.push([a, size - 11 + b]);      // sağ üst blok
+    p2.push([size - 11 + b, a]);      // sol alt blok
+  }
+  const v1 = readBlock(p1), v2 = readBlock(p2);
+  let best = null;
+  for (let ver = 7; ver <= 40; ver++) {
+    const bits = versionInfoBits(ver);
+    const d = Math.min(popcount(bits ^ v1), popcount(bits ^ v2));
+    if (!best || d < best.dist) best = { version: ver, dist: d };
+  }
+  return best && best.dist <= 3 ? best : null;
+}
+
+/* ---------- Interleaving ---------- */
+
+/** Interleave edilmiş codeword akışını RS bloklarına ayırır. */
+function deinterleave(codewords, version, ecLevel) {
+  const info = EC_BLOCKS[version] && EC_BLOCKS[version][ecLevel];
+  if (!info) return { ok: false, reason: `tablo yok: v${version}-${ecLevel}` };
+  const [ecPerBlock, groups] = info;
+
+  const blockSizes = [];
+  for (const [count, dataCw] of groups) for (let i = 0; i < count; i++) blockSizes.push(dataCw);
+  const nb = blockSizes.length;
+  const totalData = blockSizes.reduce((a, b) => a + b, 0);
+  const total = totalData + ecPerBlock * nb;
+
+  const expected = capacityOf(version).totalCodewords;
+  if (total !== expected) {
+    return { ok: false, reason: `tablo tutarsız: v${version}-${ecLevel} ${total} != ${expected}` };
+  }
+  if (codewords.length < total) {
+    return { ok: false, reason: `codeword eksik: ${codewords.length}/${total}` };
   }
 
-  const ALIGN_POS = [
-    [],[],[6,18],[6,22],[6,26],[6,30],[6,34],
-    [6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54],[6,32,58],[6,34,62],
-    [6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],
-    [6,34,62,90],[6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],
-    [6,32,58,84,110],[6,30,58,86,114],[6,34,62,90,118],[6,26,50,74,98,122],
-    [6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],
-    [6,30,58,86,114,142],[6,34,62,90,118,146],[6,30,54,78,102,126,150],
-    [6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],
-    [6,26,54,82,110,138,166],[6,30,58,86,114,142,170]
-  ];
+  const data = blockSizes.map(n => new Uint8Array(n));
+  const ecc = blockSizes.map(() => new Uint8Array(ecPerBlock));
+  const maxData = Math.max(...blockSizes);
 
-  /* ── RS blok tablosu ── */
-  const RS_TABLE = {
-    1:  { L:[7,[[1,19]]],  M:[10,[[1,16]]],  Q:[13,[[1,13]]],  H:[17,[[1,9]]] },
-    2:  { L:[10,[[1,34]]], M:[16,[[1,28]]],  Q:[22,[[1,22]]],  H:[28,[[1,16]]] },
-    3:  { L:[15,[[1,55]]], M:[26,[[1,44]]],  Q:[18,[[2,17]]],  H:[22,[[2,13]]] },
-    4:  { L:[20,[[1,80]]], M:[18,[[2,32]]],  Q:[26,[[2,24]]],  H:[16,[[4,9]]] },
-    5:  { L:[26,[[1,108]]],M:[24,[[2,43]]],  Q:[18,[[2,15],[2,16]]],H:[22,[[2,11],[2,12]]] },
-    6:  { L:[18,[[2,68]]], M:[16,[[4,27]]],  Q:[24,[[4,19]]],  H:[28,[[4,15]]] },
-    7:  { L:[20,[[2,78]]], M:[18,[[4,31]]],  Q:[18,[[2,14],[4,15]]],H:[26,[[4,13],[1,14]]] },
-    8:  { L:[24,[[2,97]]], M:[22,[[2,38],[2,39]]],Q:[22,[[4,18],[2,19]]],H:[26,[[4,14],[2,15]]] },
-    9:  { L:[30,[[2,116]]],M:[22,[[3,36],[2,37]]],Q:[20,[[4,16],[4,17]]],H:[24,[[4,12],[4,13]]] },
-    10: { L:[18,[[2,68],[2,69]]],M:[26,[[4,43],[1,44]]],Q:[24,[[6,19],[2,20]]],H:[28,[[6,15],[2,16]]] },
-    11: { L:[20,[[4,81]]],M:[30,[[1,50],[4,51]]],Q:[28,[[4,22],[4,23]]],H:[24,[[3,12],[8,13]]] },
-    12: { L:[24,[[2,92],[2,93]]],M:[22,[[6,36],[2,37]]],Q:[26,[[4,20],[6,21]]],H:[28,[[7,14],[4,15]]] },
-    13: { L:[26,[[4,107]]],M:[22,[[8,37],[1,38]]],Q:[24,[[8,20],[4,21]]],H:[22,[[12,11],[4,12]]] },
-    14: { L:[30,[[3,115],[1,116]]],M:[24,[[4,40],[5,41]]],Q:[20,[[11,16],[5,17]]],H:[24,[[11,12],[5,13]]] },
-    15: { L:[22,[[5,87],[1,88]]],M:[24,[[5,41],[5,42]]],Q:[30,[[5,24],[7,25]]],H:[24,[[11,12],[7,13]]] },
-    16: { L:[24,[[5,98],[1,99]]],M:[28,[[7,45],[3,46]]],Q:[24,[[15,19],[2,20]]],H:[30,[[3,15],[13,16]]] },
-    17: { L:[28,[[1,107],[5,108]]],M:[28,[[10,46],[1,47]]],Q:[28,[[1,22],[15,23]]],H:[28,[[2,14],[17,15]]] },
-    18: { L:[30,[[5,120],[1,121]]],M:[26,[[9,43],[4,44]]],Q:[28,[[17,22],[1,23]]],H:[28,[[2,14],[19,15]]] },
-    19: { L:[28,[[3,113],[4,114]]],M:[26,[[3,44],[11,45]]],Q:[26,[[17,21],[4,22]]],H:[26,[[9,13],[16,14]]] },
-    20: { L:[28,[[3,107],[5,108]]],M:[26,[[3,41],[13,42]]],Q:[30,[[15,24],[5,25]]],H:[28,[[15,15],[10,16]]] },
-    21: { L:[28,[[4,116],[4,117]]],M:[26,[[17,42]]],Q:[28,[[17,22],[6,23]]],H:[30,[[19,16],[6,17]]] },
-    22: { L:[28,[[2,111],[7,112]]],M:[28,[[17,46]]],Q:[30,[[7,24],[16,25]]],H:[24,[[34,13]]] },
-    23: { L:[30,[[4,121],[5,122]]],M:[28,[[4,47],[14,48]]],Q:[30,[[11,24],[14,25]]],H:[30,[[16,15],[14,16]]] },
-    24: { L:[30,[[6,117],[4,118]]],M:[28,[[6,45],[14,46]]],Q:[30,[[11,24],[16,25]]],H:[30,[[30,16],[2,17]]] },
-    25: { L:[26,[[8,106],[4,107]]],M:[28,[[8,47],[13,48]]],Q:[30,[[7,24],[22,25]]],H:[30,[[22,15],[13,16]]] },
-    26: { L:[28,[[10,114],[2,115]]],M:[28,[[19,46],[4,47]]],Q:[28,[[28,22],[6,23]]],H:[30,[[33,16],[4,17]]] },
-    27: { L:[30,[[8,122],[4,123]]],M:[28,[[22,45],[3,46]]],Q:[30,[[8,23],[26,24]]],H:[30,[[12,15],[28,16]]] },
-    28: { L:[30,[[3,117],[10,118]]],M:[28,[[3,45],[23,46]]],Q:[30,[[4,24],[31,25]]],H:[30,[[11,15],[31,16]]] },
-    29: { L:[30,[[7,116],[7,117]]],M:[28,[[21,45],[7,46]]],Q:[30,[[1,23],[37,24]]],H:[30,[[19,15],[26,16]]] },
-    30: { L:[30,[[5,115],[10,116]]],M:[28,[[19,47],[10,48]]],Q:[30,[[15,24],[25,25]]],H:[30,[[23,15],[25,16]]] },
-    31: { L:[30,[[13,115],[3,116]]],M:[28,[[2,46],[29,47]]],Q:[30,[[42,24],[1,25]]],H:[30,[[23,15],[28,16]]] },
-    32: { L:[30,[[17,115]]],M:[28,[[10,46],[23,47]]],Q:[30,[[10,24],[35,25]]],H:[30,[[19,15],[35,16]]] },
-    33: { L:[30,[[17,115],[1,116]]],M:[28,[[14,46],[21,47]]],Q:[30,[[29,24],[19,25]]],H:[30,[[11,15],[46,16]]] },
-    34: { L:[30,[[13,115],[6,116]]],M:[28,[[14,46],[23,47]]],Q:[30,[[44,24],[7,25]]],H:[30,[[59,16],[1,17]]] },
-    35: { L:[30,[[12,121],[7,122]]],M:[28,[[12,47],[26,48]]],Q:[30,[[39,24],[14,25]]],H:[30,[[22,15],[41,16]]] },
-    36: { L:[30,[[6,121],[14,122]]],M:[28,[[6,47],[34,48]]],Q:[30,[[46,24],[10,25]]],H:[30,[[2,15],[64,16]]] },
-    37: { L:[30,[[17,122],[4,123]]],M:[28,[[29,46],[14,47]]],Q:[30,[[49,24],[10,25]]],H:[30,[[24,15],[46,16]]] },
-    38: { L:[30,[[4,122],[18,123]]],M:[28,[[13,46],[32,47]]],Q:[30,[[48,24],[14,25]]],H:[30,[[42,15],[32,16]]] },
-    39: { L:[30,[[20,117],[4,118]]],M:[28,[[40,47],[7,48]]],Q:[30,[[43,24],[22,25]]],H:[30,[[10,15],[67,16]]] },
-    40: { L:[30,[[19,118],[6,119]]],M:[28,[[18,47],[31,48]]],Q:[30,[[34,24],[34,25]]],H:[30,[[20,15],[61,16]]] },
+  let idx = 0;
+  for (let i = 0; i < maxData; i++) {
+    for (let b = 0; b < nb; b++) if (i < blockSizes[b]) data[b][i] = codewords[idx++];
+  }
+  for (let i = 0; i < ecPerBlock; i++) {
+    for (let b = 0; b < nb; b++) ecc[b][i] = codewords[idx++];
+  }
+  if (idx !== total) return { ok: false, reason: `interleave sayacı tutmadı: ${idx}/${total}` };
+  return { ok: true, data, ecc, ecPerBlock, total, blockSizes };
+}
+
+/** Blokları ters interleave eder (encoder tarafı). */
+function interleave(dataBlocks, eccBlocks) {
+  const out = [];
+  const maxData = Math.max(...dataBlocks.map(b => b.length));
+  for (let i = 0; i < maxData; i++) {
+    for (const b of dataBlocks) if (i < b.length) out.push(b[i]);
+  }
+  const maxEc = Math.max(...eccBlocks.map(b => b.length));
+  for (let i = 0; i < maxEc; i++) {
+    for (const b of eccBlocks) if (i < b.length) out.push(b[i]);
+  }
+  return out;
+}
+
+/* ---------- Segment decoder ---------- */
+
+const ALNUM_TABLE = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+
+function charCountBits(mode, version) {
+  const t = version <= 9 ? 0 : (version <= 26 ? 1 : 2);
+  switch (mode) {
+    case 1: return [10, 12, 14][t];   // Numeric
+    case 2: return [9, 11, 13][t];    // Alphanumeric
+    case 4: return [8, 16, 16][t];    // Byte
+    case 8: return [8, 10, 12][t];    // Kanji
+    default: return 0;
+  }
+}
+
+function decodeSegments(dataBytes, version) {
+  const bits = [];
+  for (const b of dataBytes) for (let i = 7; i >= 0; i--) bits.push((b >> i) & 1);
+  let p = 0;
+  const left = () => bits.length - p;
+  const read = n => { let v = 0; for (let i = 0; i < n; i++) v = (v << 1) | (bits[p++] | 0); return v; };
+
+  let text = '';
+  const segments = [];
+  let eci = null;
+  let guard = 0;
+
+  while (left() >= 4 && guard++ < 256) {
+    const mode = read(4);
+    if (mode === 0) { segments.push({ mode: 'TERMINATOR' }); break; }
+
+    if (mode === 7) {                       // ECI
+      let v = read(8);
+      if ((v & 0x80) === 0) eci = v & 0x7f;
+      else if ((v & 0xc0) === 0x80) eci = ((v & 0x3f) << 8) | read(8);
+      else eci = ((v & 0x1f) << 16) | (read(8) << 8) | read(8);
+      segments.push({ mode: 'ECI', value: eci });
+      continue;
+    }
+
+    const ccBits = charCountBits(mode, version);
+    if (!ccBits) return { ok: false, reason: `desteklenmeyen mod: 0b${mode.toString(2).padStart(4, '0')}`, text, segments };
+    if (left() < ccBits) return { ok: false, reason: 'karakter sayacı için bit yetersiz', text, segments };
+    let count = read(ccBits);
+
+    if (mode === 1) {                        // Numeric
+      if (left() < Math.floor(count / 3) * 10 + [0, 4, 7][count % 3]) return { ok: false, reason: 'numeric bit yetersiz', text, segments };
+      let s = '';
+      while (count >= 3) { s += String(read(10)).padStart(3, '0'); count -= 3; }
+      if (count === 2) s += String(read(7)).padStart(2, '0');
+      else if (count === 1) s += String(read(4));
+      text += s; segments.push({ mode: 'NUMERIC', length: s.length });
+
+    } else if (mode === 2) {                 // Alphanumeric
+      let s = '';
+      while (count >= 2) {
+        if (left() < 11) return { ok: false, reason: 'alnum bit yetersiz', text, segments };
+        const v = read(11);
+        if (v >= 45 * 45) return { ok: false, reason: 'alnum değer aralık dışı', text, segments };
+        s += ALNUM_TABLE[Math.floor(v / 45)] + ALNUM_TABLE[v % 45];
+        count -= 2;
+      }
+      if (count === 1) {
+        if (left() < 6) return { ok: false, reason: 'alnum bit yetersiz', text, segments };
+        const v = read(6);
+        if (v >= 45) return { ok: false, reason: 'alnum değer aralık dışı', text, segments };
+        s += ALNUM_TABLE[v];
+      }
+      text += s; segments.push({ mode: 'ALPHANUMERIC', length: s.length });
+
+    } else if (mode === 4) {                 // Byte
+      if (left() < count * 8) return { ok: false, reason: 'byte bit yetersiz', text, segments };
+      const raw = new Uint8Array(count);
+      for (let i = 0; i < count; i++) raw[i] = read(8);
+      text += decodeBytes(raw, eci);
+      segments.push({ mode: 'BYTE', length: count, eci });
+
+    } else if (mode === 8) {                 // Kanji (Shift-JIS)
+      if (left() < count * 13) return { ok: false, reason: 'kanji bit yetersiz', text, segments };
+      let s = '';
+      for (let i = 0; i < count; i++) {
+        const v = read(13);
+        let sjis = (Math.floor(v / 0xc0) << 8) | (v % 0xc0);
+        sjis += (sjis < 0x1f00) ? 0x8140 : 0xc140;
+        s += sjisToChar(sjis);
+      }
+      text += s; segments.push({ mode: 'KANJI', length: count });
+
+    } else {
+      return { ok: false, reason: `bilinmeyen mod: ${mode}`, text, segments };
+    }
+  }
+  return { ok: true, text, segments, eci };
+}
+
+function decodeBytes(raw, eci) {
+  // ECI 3 = ISO-8859-1, 26 = UTF-8, 25 = UTF-16BE. Belirtilmemişse önce UTF-8 dene.
+  const tryDecode = (label, fatal) => {
+    try { return new TextDecoder(label, { fatal }).decode(raw); } catch (e) { return null; }
+  };
+  if (eci === 3) return tryDecode('iso-8859-1', false) || latin1(raw);
+  if (eci === 25) return tryDecode('utf-16be', false) || latin1(raw);
+  if (eci === 26) return tryDecode('utf-8', false) || latin1(raw);
+  return tryDecode('utf-8', true) || tryDecode('iso-8859-1', false) || latin1(raw);
+}
+function latin1(raw) { let s = ''; for (const b of raw) s += String.fromCharCode(b); return s; }
+function sjisToChar(code) {
+  // Tam Shift-JIS tablosu gömmeden ASCII aralığını ve kalanı güvenli şekilde temsil et.
+  if (code >= 0x20 && code <= 0x7e) return String.fromCharCode(code);
+  try { return new TextDecoder('shift_jis').decode(new Uint8Array([code >> 8, code & 0xff])); }
+  catch (e) { return '\uFFFD'; }
+}
+
+/* ---------- Matris decoder ---------- */
+
+/**
+ * Örneklenmiş modül matrisinden metni çözer.
+ * Format bilgisi okunamazsa 32 (ec, mask) kombinasyonunu RS ile doğrulayarak dener.
+ */
+function decodeMatrix(matrix, size, opts = {}) {
+  const log = opts.log || (() => {});
+  if ((size - 17) % 4 !== 0) return { ok: false, stage: 'VERSION', reason: `geçersiz matris boyutu ${size}` };
+  let version = (size - 17) / 4;
+  if (version < 1 || version > 40) return { ok: false, stage: 'VERSION', reason: `versiyon aralık dışı ${version}` };
+
+  if (version >= 7) {
+    const vi = readVersionInfo(matrix, size);
+    if (vi && vi.version !== version) {
+      log(`[VERSION] uyarı: geometri v${version}, versiyon bilgisi v${vi.version} (d=${vi.dist})`);
+    } else if (vi) {
+      log(`[VERSION] v${version} — versiyon bilgisi BCH ile doğrulandı (d=${vi.dist})`);
+    }
+  }
+
+  const fmt = readFormat(matrix, size);
+  const f1s = fmt.copy1.toString(2).padStart(15, '0');
+  const f2s = fmt.copy2.toString(2).padStart(15, '0');
+  log(`[FORMAT] copy1=${f1s} copy2=${f2s} kopya farkı=${fmt.agree} bit`);
+
+  let candidates;
+  if (fmt.best) {
+    log(`[FORMAT] BCH OK -> ${fmt.best.ec} / mask ${fmt.best.mask} (d=${fmt.best.dist})`);
+    candidates = [fmt.best, ...fmt.candidates.filter(c => c !== fmt.best)];
+  } else {
+    log(`[FORMAT] BCH BAŞARISIZ (en yakın aday d=${fmt.candidates[0].dist} > 3) -> RS doğrulamalı brute-force`);
+    candidates = fmt.candidates;
+  }
+
+  const { order } = dataModuleOrder(version);
+  const cap = capacityOf(version);
+  let lastReason = 'bilinmiyor';
+
+  for (const cand of candidates) {
+    const maskFn = MASK_FN[cand.mask];
+    const bits = new Uint8Array(order.length);
+    for (let i = 0; i < order.length; i++) {
+      const idx = order[i];
+      const r = (idx / size) | 0, c = idx % size;
+      bits[i] = (matrix[idx] & 1) ^ (maskFn(r, c) ? 1 : 0);
+    }
+    const codewords = new Uint8Array(cap.totalCodewords);
+    for (let i = 0; i < cap.totalCodewords; i++) {
+      let v = 0;
+      for (let j = 0; j < 8; j++) v = (v << 1) | bits[i * 8 + j];
+      codewords[i] = v;
+    }
+
+    const di = deinterleave(codewords, version, cand.ec);
+    if (!di.ok) { lastReason = di.reason; continue; }
+
+    let allOk = true, totalErrors = 0;
+    const out = [];
+    const blockReports = [];
+    for (let b = 0; b < di.data.length; b++) {
+      const full = new Uint8Array(di.data[b].length + di.ecPerBlock);
+      full.set(di.data[b], 0);
+      full.set(di.ecc[b], di.data[b].length);
+      const res = rsDecode(full, di.ecPerBlock);
+      if (!res.ok) {
+        allOk = false;
+        lastReason = `blok ${b}: ${res.reason}`;
+        blockReports.push({ block: b, ok: false, reason: res.reason });
+        break;
+      }
+      totalErrors += res.errors;
+      blockReports.push({ block: b, ok: true, errors: res.errors, capacity: di.ecPerBlock >> 1 });
+      for (let i = 0; i < di.data[b].length; i++) out.push(res.data[i]);
+    }
+    if (!allOk) continue;
+
+    const seg = decodeSegments(out, version);
+    if (!seg.ok || !seg.text) { lastReason = seg.reason || 'segment boş'; continue; }
+
+    return {
+      ok: true,
+      text: seg.text,
+      version, size,
+      ecLevel: cand.ec,
+      mask: cand.mask,
+      formatDistance: cand.dist,
+      formatFromBCH: !!fmt.best && fmt.best === cand,
+      totalErrors,
+      blockReports,
+      segments: seg.segments,
+      codewordCount: cap.totalCodewords,
+      remainderBits: cap.remainderBits
+    };
+  }
+  return { ok: false, stage: 'RS', reason: lastReason, version, size, format: fmt };
+}
+
+/* ---------- Encoder (self-test ve test vektörleri için) ---------- */
+
+function chooseMode(text) {
+  if (/^[0-9]*$/.test(text)) return 1;
+  if (new RegExp('^[' + ALNUM_TABLE.replace(/[$*+\-./]/g, m => '\\' + m) + ']*$').test(text)) return 2;
+  return 4;
+}
+
+function encodeToMatrix(text, version, ecLevel, mask, forceMode) {
+  const info = EC_BLOCKS[version][ecLevel];
+  const [ecPerBlock, groups] = info;
+  const blockSizes = [];
+  for (const [count, dataCw] of groups) for (let i = 0; i < count; i++) blockSizes.push(dataCw);
+  const totalData = blockSizes.reduce((a, b) => a + b, 0);
+
+  const mode = forceMode || chooseMode(text);
+  const bits = [];
+  const push = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1); };
+
+  push(mode, 4);
+  if (mode === 1) {
+    push(text.length, charCountBits(1, version));
+    let i = 0;
+    for (; i + 3 <= text.length; i += 3) push(parseInt(text.substr(i, 3), 10), 10);
+    if (text.length - i === 2) push(parseInt(text.substr(i, 2), 10), 7);
+    else if (text.length - i === 1) push(parseInt(text.substr(i, 1), 10), 4);
+  } else if (mode === 2) {
+    push(text.length, charCountBits(2, version));
+    let i = 0;
+    for (; i + 2 <= text.length; i += 2) push(ALNUM_TABLE.indexOf(text[i]) * 45 + ALNUM_TABLE.indexOf(text[i + 1]), 11);
+    if (i < text.length) push(ALNUM_TABLE.indexOf(text[i]), 6);
+  } else {
+    const raw = new TextEncoder().encode(text);
+    push(raw.length, charCountBits(4, version));
+    for (const b of raw) push(b, 8);
+  }
+
+  const capBits = totalData * 8;
+  if (bits.length > capBits) throw new Error(`veri kapasiteyi aşıyor: ${bits.length} > ${capBits}`);
+  for (let i = 0; i < 4 && bits.length < capBits; i++) bits.push(0);
+  while (bits.length % 8 !== 0) bits.push(0);
+  const padBytes = [0xec, 0x11];
+  let pi = 0;
+  while (bits.length < capBits) { push(padBytes[pi++ % 2], 8); }
+
+  const allData = new Uint8Array(totalData);
+  for (let i = 0; i < totalData; i++) {
+    let v = 0;
+    for (let j = 0; j < 8; j++) v = (v << 1) | bits[i * 8 + j];
+    allData[i] = v;
+  }
+
+  const dataBlocks = [], eccBlocks = [];
+  let off = 0;
+  for (const n of blockSizes) {
+    const blk = allData.slice(off, off + n); off += n;
+    dataBlocks.push(blk);
+    eccBlocks.push(rsEncode(blk, ecPerBlock));
+  }
+  const stream = interleave(dataBlocks, eccBlocks);
+
+  const size = sizeForVersion(version);
+  const matrix = new Uint8Array(size * size);
+  placeFunctionPatterns(matrix, size, version);
+
+  const { order } = dataModuleOrder(version);
+  const maskFn = MASK_FN[mask];
+  for (let i = 0; i < order.length; i++) {
+    const byteIdx = i >> 3;
+    let bit = 0;
+    if (byteIdx < stream.length) bit = (stream[byteIdx] >> (7 - (i & 7))) & 1;
+    const idx = order[i];
+    const r = (idx / size) | 0, c = idx % size;
+    matrix[idx] = bit ^ (maskFn(r, c) ? 1 : 0);
+  }
+
+  // Format bilgisi
+  const fBits = formatInfoBits(EC_FORMAT_BITS[ecLevel], mask);
+  const { copy1, copy2 } = formatPositions(size);
+  for (let i = 0; i < 15; i++) {
+    const b = (fBits >> (14 - i)) & 1;
+    matrix[copy1[i][0] * size + copy1[i][1]] = b;
+    matrix[copy2[i][0] * size + copy2[i][1]] = b;
+  }
+  matrix[(4 * version + 9) * size + 8] = 1;   // dark module
+
+  // Versiyon bilgisi
+  if (version >= 7) {
+    const vBits = versionInfoBits(version);
+    for (let i = 0; i < 18; i++) {
+      const b = (vBits >> i) & 1;
+      const a = Math.floor(i / 3), d = i % 3;
+      matrix[a * size + (size - 11 + d)] = b;
+      matrix[(size - 11 + d) * size + a] = b;
+    }
+  }
+  return { matrix, size, version, ecLevel, mask, mode };
+}
+
+function placeFunctionPatterns(matrix, size, version) {
+  const set = (r, c, v) => { if (r >= 0 && r < size && c >= 0 && c < size) matrix[r * size + c] = v; };
+  const finder = (r0, c0) => {
+    for (let r = -1; r <= 7; r++) for (let c = -1; c <= 7; c++) {
+      const inRing = (r >= 0 && r <= 6 && c >= 0 && c <= 6);
+      let v = 0;
+      if (inRing) {
+        const m = Math.max(Math.abs(r - 3), Math.abs(c - 3));
+        v = (m === 2) ? 0 : 1;   // 7x7: dış halka siyah, 5x5 halka beyaz, 3x3 çekirdek siyah
+      }
+      set(r0 + r, c0 + c, v);
+    }
+  };
+  finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+  for (let i = 8; i < size - 8; i++) { set(6, i, i % 2 === 0 ? 1 : 0); set(i, 6, i % 2 === 0 ? 1 : 0); }
+  const ap = ALIGNMENT_POS[version] || [];
+  for (const ay of ap) for (const ax of ap) {
+    if ((ax === 6 && ay === 6) || (ax === 6 && ay === size - 7) || (ax === size - 7 && ay === 6)) continue;
+    for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+      const m = Math.max(Math.abs(dr), Math.abs(dc));
+      set(ay + dr, ax + dc, m === 1 ? 0 : 1);
+    }
+  }
+}
+
+/* ============================================================
+   BÖLÜM 4 — GÖRÜNTÜ İŞLEME PIPELINE'I
+   binarization -> finder detection -> geometry -> homography
+   -> module sampling -> matrix
+   ============================================================ */
+
+function toGray(data, w, h) {
+  const g = new Uint8Array(w * h);
+  for (let i = 0, p = 0; i < g.length; i++, p += 4) {
+    g[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;
+  }
+  return g;
+}
+
+function buildIntegral(gray, w, h) {
+  const s = new Int32Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      row += gray[y * w + x];
+      s[(y + 1) * (w + 1) + (x + 1)] = s[y * (w + 1) + (x + 1)] + row;
+    }
+  }
+  return s;
+}
+
+/** Yerel uyarlamalı eşikleme. window = yarıçap, bias = ortalamanın çarpanı. */
+function binarizeLocal(gray, w, h, opts = {}) {
+  const win = opts.window || Math.max(6, Math.round(Math.min(w, h) / 24));
+  const bias = opts.bias === undefined ? 0.92 : opts.bias;
+  const minContrast = opts.minContrast === undefined ? 12 : opts.minContrast;
+  const S = buildIntegral(gray, w, h);
+  const bin = new Uint8Array(w * h);
+  const W = w + 1;
+  // global ortalama, düşük kontrastlı düz bölgeler için yedek
+  const globalMean = S[h * W + w] / (w * h);
+  for (let y = 0; y < h; y++) {
+    const y1 = Math.max(0, y - win), y2 = Math.min(h - 1, y + win);
+    for (let x = 0; x < w; x++) {
+      const x1 = Math.max(0, x - win), x2 = Math.min(w - 1, x + win);
+      const sum = S[(y2 + 1) * W + (x2 + 1)] - S[y1 * W + (x2 + 1)] - S[(y2 + 1) * W + x1] + S[y1 * W + x1];
+      const cnt = (y2 - y1 + 1) * (x2 - x1 + 1);
+      const mean = sum / cnt;
+      const g = gray[y * w + x];
+      // Pencere neredeyse düz ise (tek renk alan) global ortalamaya düş
+      const t = mean * bias;
+      bin[y * w + x] = (g < t - 0) ? 1 : 0;
+      if (Math.abs(g - mean) < minContrast) bin[y * w + x] = g < globalMean * 0.85 ? 1 : 0;
+    }
+  }
+  return bin;
+}
+
+/** Otsu ile global eşikleme. */
+function binarizeGlobal(gray, w, h, opts = {}) {
+  const hist = new Int32Array(256);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+  const total = gray.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 0, thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > best) { best = v; thr = t; }
+  }
+  thr = Math.round(thr * (opts.bias === undefined ? 1 : opts.bias));
+  const bin = new Uint8Array(w * h);
+  for (let i = 0; i < gray.length; i++) bin[i] = gray[i] <= thr ? 1 : 0;
+  bin.threshold = thr;
+  return bin;
+}
+
+/* ---------- Finder pattern tespiti ---------- */
+
+function ratioOK(s, tolerance) {
+  const total = s[0] + s[1] + s[2] + s[3] + s[4];
+  if (total < 7) return false;
+  const u = total / 7;
+  const e = u * tolerance;
+  return Math.abs(u - s[0]) < e && Math.abs(u - s[1]) < e &&
+         Math.abs(3 * u - s[2]) < 3 * e &&
+         Math.abs(u - s[3]) < e && Math.abs(u - s[4]) < e;
+}
+
+function centerFromRun(end, s) {
+  return end - s[4] - s[3] - s[2] / 2;
+}
+
+/** Dikey çapraz doğrulama: (cx, ry) etrafında 1:1:3:1:1 arar, alt-piksel merkez döner. */
+function crossCheckVertical(bin, w, h, cx, ry, maxCount, originalTotal) {
+  const s = [0, 0, 0, 0, 0];
+  let y = ry;
+  while (y >= 0 && bin[y * w + cx]) { s[2]++; y--; }
+  if (y < 0) return NaN;
+  while (y >= 0 && !bin[y * w + cx] && s[1] <= maxCount) { s[1]++; y--; }
+  if (y < 0 || s[1] > maxCount) return NaN;
+  while (y >= 0 && bin[y * w + cx] && s[0] <= maxCount) { s[0]++; y--; }
+  if (s[0] > maxCount) return NaN;
+  y = ry + 1;
+  while (y < h && bin[y * w + cx]) { s[2]++; y++; }
+  if (y >= h) return NaN;
+  while (y < h && !bin[y * w + cx] && s[3] <= maxCount) { s[3]++; y++; }
+  if (y >= h || s[3] > maxCount) return NaN;
+  while (y < h && bin[y * w + cx] && s[4] <= maxCount) { s[4]++; y++; }
+  if (s[4] > maxCount) return NaN;
+  const total = s[0] + s[1] + s[2] + s[3] + s[4];
+  if (5 * Math.abs(total - originalTotal) >= 2 * originalTotal) return NaN;
+  return ratioOK(s, 0.5) ? centerFromRun(y, s) : NaN;
+}
+
+function crossCheckHorizontal(bin, w, h, cy, cx, maxCount, originalTotal) {
+  const s = [0, 0, 0, 0, 0];
+  let x = cx;
+  while (x >= 0 && bin[cy * w + x]) { s[2]++; x--; }
+  if (x < 0) return NaN;
+  while (x >= 0 && !bin[cy * w + x] && s[1] <= maxCount) { s[1]++; x--; }
+  if (x < 0 || s[1] > maxCount) return NaN;
+  while (x >= 0 && bin[cy * w + x] && s[0] <= maxCount) { s[0]++; x--; }
+  if (s[0] > maxCount) return NaN;
+  x = cx + 1;
+  while (x < w && bin[cy * w + x]) { s[2]++; x++; }
+  if (x >= w) return NaN;
+  while (x < w && !bin[cy * w + x] && s[3] <= maxCount) { s[3]++; x++; }
+  if (x >= w || s[3] > maxCount) return NaN;
+  while (x < w && bin[cy * w + x] && s[4] <= maxCount) { s[4]++; x++; }
+  if (s[4] > maxCount) return NaN;
+  const total = s[0] + s[1] + s[2] + s[3] + s[4];
+  if (5 * Math.abs(total - originalTotal) >= originalTotal) return NaN;
+  return ratioOK(s, 0.5) ? centerFromRun(x, s) : NaN;
+}
+
+/** Köşegen doğrulama — hizalama karesi / rastgele blokların elenmesi için. */
+function crossCheckDiagonal(bin, w, h, cy, cx) {
+  const s = [0, 0, 0, 0, 0];
+  let i = 0;
+  while (cx - i >= 0 && cy - i >= 0 && bin[(cy - i) * w + (cx - i)]) { s[2]++; i++; }
+  while (cx - i >= 0 && cy - i >= 0 && !bin[(cy - i) * w + (cx - i)]) { s[1]++; i++; }
+  while (cx - i >= 0 && cy - i >= 0 && bin[(cy - i) * w + (cx - i)]) { s[0]++; i++; }
+  i = 1;
+  while (cx + i < w && cy + i < h && bin[(cy + i) * w + (cx + i)]) { s[2]++; i++; }
+  while (cx + i < w && cy + i < h && !bin[(cy + i) * w + (cx + i)]) { s[3]++; i++; }
+  while (cx + i < w && cy + i < h && bin[(cy + i) * w + (cx + i)]) { s[4]++; i++; }
+  return ratioOK(s, 0.6);
+}
+
+/**
+ * Tüm görüntüyü tarayarak finder pattern adaylarını bulur ve mekânsal olarak kümeler.
+ * @returns {Array<{x,y,mod,count}>} güven sırasına göre
+ */
+function detectFinders(bin, w, h, opts = {}) {
+  const raw = [];
+  const rowStep = opts.rowStep || Math.max(1, Math.floor(Math.min(w, h) / 240));
+
+  // Durum makinesi: 0,2,4 = siyah koşu; 1,3 = beyaz koşu (1:1:3:1:1)
+  /* Çapraz doğrulamalar TEK satır/sütun üzerinde yapılmaz: gölge, çizik,
+     motion blur veya üstüne çizilmiş bir işaret tek bir hattı bozabilir.
+     Merkezin etrafındaki birkaç hat denenir. */
+  const tryCandidate = (s, endX, y) => {
+    if (!ratioOK(s, 0.5)) return;
+    const total = s[0] + s[1] + s[2] + s[3] + s[4];
+    const mod = total / 7;
+    const cx0 = Math.round(centerFromRun(endX, s));
+    if (cx0 < 0 || cx0 >= w) return;
+    const maxCount = Math.ceil(mod * 2);
+    const step = Math.max(1, Math.round(mod / 3));
+    const offsets = [0, 1, -1, step, -step, 2 * step, -2 * step];
+
+    let cyF = NaN, usedCx = cx0;
+    for (const o of offsets) {
+      const cx = cx0 + o;
+      if (cx < 0 || cx >= w) continue;
+      const v = crossCheckVertical(bin, w, h, cx, y, maxCount, total);
+      if (!isNaN(v)) { cyF = v; usedCx = cx; break; }
+    }
+    if (isNaN(cyF)) return;
+    const cyI = Math.round(cyF);
+    if (cyI < 0 || cyI >= h) return;
+
+    let cxF = NaN;
+    for (const o of offsets) {
+      const cy = cyI + o;
+      if (cy < 0 || cy >= h) continue;
+      const v = crossCheckHorizontal(bin, w, h, cy, usedCx, maxCount, total);
+      if (!isNaN(v)) { cxF = v; break; }
+    }
+    if (isNaN(cxF)) return;
+
+    let diagOK = false;
+    for (const o of [0, 1, -1, step, -step]) {
+      if (crossCheckDiagonal(bin, w, h, Math.min(h - 1, Math.max(0, cyI + o)), Math.round(cxF))) { diagOK = true; break; }
+    }
+    if (!diagOK) return;
+    raw.push({ x: cxF, y: cyF, mod });
   };
 
-  const EC_NAMES = ['M','L','H','Q'];
-
-  /* ── Veri bit stream okuyucu ── */
-  function readBits(grid, size, funcMask, maskFn) {
-    const bits = [];
-    let upward = true, col = size - 1;
-
-    while (col > 0) {
-      if (col === 6) col--;
-      for (let i = 0; i < size; i++) {
-        const r = upward ? size - 1 - i : i;
-        for (let dc = 0; dc < 2; dc++) {
-          const c = col - dc;
-          if (funcMask[r*size+c]) continue;
-          let bit = grid[r*size+c] & 1;
-          if (maskFn(r, c)) bit ^= 1;
-          bits.push(bit);
+  for (let y = 0; y < h; y += rowStep) {
+    const s = [0, 0, 0, 0, 0];
+    let state = 0;
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      if (bin[row + x]) {                    // siyah piksel
+        if (state & 1) state++;              // beyaz sayıyorduk -> siyaha geç
+        s[state]++;
+      } else {                               // beyaz piksel
+        if ((state & 1) === 0) {             // siyah sayıyorduk
+          if (state === 4) {
+            tryCandidate(s, x, y);
+            s[0] = s[2]; s[1] = s[3]; s[2] = s[4]; s[3] = 1; s[4] = 0;
+            state = 3;
+          } else {
+            state++;
+            s[state]++;
+          }
+        } else {
+          s[state]++;
         }
       }
-      col -= 2;
-      upward = !upward;
     }
-    return bits;
+    if (state === 4) tryCandidate(s, w, y);
   }
 
-  /* ── Bit okuyucu yardımcı ── */
-  class BitReader {
-    constructor(bits) { this.bits = bits; this.pos = 0; }
-    read(n) {
-      let v = 0;
-      for (let i = 0; i < n; i++) v = (v << 1) | (this.bits[this.pos++] || 0);
-      return v;
-    }
-    get remaining() { return this.bits.length - this.pos; }
-  }
-
-  /* ── Decode pipeline ── */
-  function decodeCodewords(codewords, version, ecKey) {
-    const info = RS_TABLE[version]?.[ecKey];
-    if (!info) throw new Error('RS tablosu eksik: v' + version + ' ' + ecKey);
-    const [ecPerBlock, blockDef] = info;
-
-    const blocks = [];
-    for (const [cnt, dataCW] of blockDef) {
-      for (let i = 0; i < cnt; i++) blocks.push({ dataCW, ecPerBlock });
-    }
-
-    const maxData = Math.max(...blocks.map(b => b.dataCW));
-    const maxEC   = ecPerBlock;
-
-    const dataBlocks = blocks.map(b => new Uint8Array(b.dataCW));
-    const ecBlocks = blocks.map(() => new Uint8Array(ecPerBlock));
-
-    let cw = 0;
-    for (let i = 0; i < maxData; i++) {
-      for (let bi = 0; bi < blocks.length; bi++) {
-        if (i < blocks[bi].dataCW) dataBlocks[bi][i] = codewords[cw++];
-      }
-    }
-    for (let i = 0; i < maxEC; i++) {
-      for (let bi = 0; bi < blocks.length; bi++) {
-        ecBlocks[bi][i] = codewords[cw++];
-      }
-    }
-
-    const result = [];
-    for (let bi = 0; bi < blocks.length; bi++) {
-      const full = new Uint8Array([...dataBlocks[bi], ...ecBlocks[bi]]);
-      let corrected;
-      try { corrected = rsCorrect(full, ecPerBlock); }
-      catch(e) { corrected = full; }
-      for (let i = 0; i < dataBlocks[bi].length; i++) result.push(corrected[i]);
-    }
-    return result;
-  }
-
-  function decodeSegments(data, version) {
-    const br = new BitReader(data.flatMap(b => {
-      const bits = [];
-      for (let i = 7; i >= 0; i--) bits.push((b >> i) & 1);
-      return bits;
-    }));
-
-    let result = '';
-    while (br.remaining > 4) {
-      const mode = br.read(4);
-      if (mode === 0) break;
-
-      if (mode === 0b0100) { 
-        const lenBits = version <= 9 ? 8 : 16;
-        const len = br.read(lenBits);
-        const bytes = [];
-        for (let i = 0; i < len; i++) bytes.push(br.read(8));
-        result += decodeUTF8(bytes);
-      } else if (mode === 0b0001) { 
-        const lenBits = version <= 9 ? 10 : version <= 26 ? 12 : 14;
-        const len = br.read(lenBits);
-        let str = '';
-        let remaining = len;
-        while (remaining >= 3) { str += br.read(10).toString().padStart(3,'0'); remaining -= 3; }
-        if (remaining === 2) str += br.read(7).toString().padStart(2,'0');
-        else if (remaining === 1) str += br.read(4).toString();
-        result += str;
-      } else if (mode === 0b0010) { 
-        const ALPHA = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
-        const lenBits = version <= 9 ? 9 : version <= 26 ? 11 : 13;
-        const len = br.read(lenBits);
-        let str = '', remaining = len;
-        while (remaining >= 2) {
-          const v = br.read(11);
-          str += ALPHA[Math.floor(v/45)] + ALPHA[v % 45];
-          remaining -= 2;
-        }
-        if (remaining === 1) str += ALPHA[br.read(6)];
-        result += str;
-      } else if (mode === 0b0100) { 
-        const len = br.read(8);
-        for (let i = 0; i < len; i++) br.read(13); 
-        result += '[Kanji]';
-      } else {
+  /* --- mekânsal kümeleme: aynı finder'ın onlarca tespiti -> tek merkez --- */
+  const clusters = [];
+  for (const p of raw) {
+    let placed = false;
+    for (const c of clusters) {
+      const d = Math.hypot(c.x - p.x, c.y - p.y);
+      if (d < Math.max(3, c.mod * 1.4)) {
+        const n = c.count;
+        c.x = (c.x * n + p.x) / (n + 1);
+        c.y = (c.y * n + p.y) / (n + 1);
+        c.mod = (c.mod * n + p.mod) / (n + 1);
+        c.count = n + 1;
+        placed = true;
         break;
       }
     }
-    return result;
+    if (!placed) clusters.push({ x: p.x, y: p.y, mod: p.mod, count: 1 });
   }
-
-  /* ── UTF-8 decode ── */
-  function decodeUTF8(bytes) {
-    try {
-      return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
-    } catch(e) {
-      return String.fromCharCode(...bytes);
-    }
-  }
-
-  /* ── Ana decode fonksiyonu ── */
-  function decode(imageData) {
-    const { data, width: w, height: h } = imageData;
-
-    const bin = binarize(data, w, h);
-    const centers = findFinderCenters(bin, w, h);
-    if (centers.length < 3) return null;
-
-    const triples = [];
-    for (let i = 0; i < centers.length - 2; i++)
-      for (let j = i+1; j < centers.length - 1; j++)
-        for (let k = j+1; k < centers.length; k++)
-          triples.push([centers[i], centers[j], centers[k]]);
-
-    for (const triple of triples) {
-      try {
-        const result = tryDecode(bin, w, h, triple);
-        if (result) return result;
-      } catch(e) { }
-    }
-    return null;
-  }
-
-  function tryDecode(bin, w, h, triple) {
-    const ordered = orderFinders(triple);
-    if (!ordered) return null;
-    const { tl, tr, bl } = ordered;
-
-    const avgMod = (tl.mod + tr.mod + bl.mod) / 3;
-    const version = estimateVersion(tl, tr, bl, avgMod);
-    const size = 21 + (version - 1) * 4;
-
-    const tlP = [tl.x - 3.5*tl.mod, tl.y - 3.5*tl.mod];
-    const trP = [tr.x + 3.5*tr.mod, tr.y - 3.5*tr.mod];
-    const blP = [bl.x - 3.5*bl.mod, bl.y + 3.5*bl.mod];
-    const brP = [tr.x + bl.x - tl.x + 3.5*(tr.mod+bl.mod-tl.mod),
-                 tr.y + bl.y - tl.y + 3.5*(tr.mod+bl.mod-tl.mod)];
-
-    const srcPts = [tlP, trP, brP, blP];
-    const dstPts = [[0,0],[size,0],[size,size],[0,size]];
-    const H = computeHomography(dstPts, srcPts); 
-
-    const grid = sampleBits(bin, w, h, H, size);
-
-    const fmt = readFormat(grid, size);
-    if (!fmt) return null;
-
-    const ecName = EC_NAMES[fmt.ec];
-    const funcMask = buildFuncMask(size, version);
-    const maskFn = MASK_FN[fmt.mask];
-    const bits = readBits(grid, size, funcMask, maskFn);
-
-    const codewords = [];
-    for (let i = 0; i + 7 < bits.length; i += 8) {
-      let v = 0;
-      for (let j = 0; j < 8; j++) v = (v << 1) | bits[i+j];
-      codewords.push(v);
-    }
-
-    const dataBytes = decodeCodewords(codewords, version, ecName);
-    const text = decodeSegments(dataBytes, version);
-
-    return text && text.length > 0 ? text : null;
-  }
-
-  return { decode };
-})();
-
-/* ============================================================
-   KAMERA + UI YÖNETİMİ
-   ============================================================ */
-const video    = document.getElementById('video');
-const canvas   = document.getElementById('canvas');
-const ctx      = canvas.getContext('2d', { willReadFrequently: true });
-const statusEl = document.getElementById('status');
-const btnCam   = document.getElementById('btn-cam');
-const btnClear = document.getElementById('btn-clear');
-const scanLine = document.getElementById('scan-line');
-const flash    = document.getElementById('flash');
-const histList = document.getElementById('hist-list');
-const histWrap = document.getElementById('history');
-const dbg      = document.getElementById('dbg');
-
-let stream    = null;
-let scanning  = false;
-let raf       = null;
-let cooldown  = false;
-let results   = [];
-let frameCount = 0;
-
-function setStatus(msg, type = '') {
-  statusEl.textContent = msg;
-  statusEl.className = 'status-box' + (type ? ' ' + type : '');
+  clusters.sort((a, b) => b.count - a.count);
+  return clusters;
 }
 
-async function toggleCamera() {
-  if (scanning) stopCamera();
-  else await startCamera();
+/* ---------- Geometri ---------- */
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** Üç finder'ı TL/TR/BL olarak sıralar (dik açı köşesi = TL). */
+function orderFinders(p) {
+  const [a, b, c] = p;
+  const dAB = dist(a, b), dBC = dist(b, c), dCA = dist(c, a);
+  let tl, x, y;
+  if (dBC >= dAB && dBC >= dCA) { tl = a; x = b; y = c; }
+  else if (dCA >= dAB && dCA >= dBC) { tl = b; x = a; y = c; }
+  else { tl = c; x = a; y = b; }
+  // sağ el kuralı: (x-tl) x (y-tl) > 0 ise x=TR, y=BL
+  const cross = (x.x - tl.x) * (y.y - tl.y) - (x.y - tl.y) * (y.x - tl.x);
+  return cross >= 0 ? { tl, tr: x, bl: y } : { tl, tr: y, bl: x };
 }
 
-async function startCamera() {
-  setStatus('Kamera başlatılıyor…', 'busy');
-  btnCam.disabled = true;
+/** Üçgenin QR geometrisine uygunluğunu ölçer ve bir sıralama skoru üretir. */
+function validateTriangle(tl, tr, bl) {
+  const d1 = dist(tl, tr), d2 = dist(tl, bl), d3 = dist(tr, bl);
+  if (d1 < 14 || d2 < 14) return { ok: false, reason: 'finder mesafesi çok küçük', score: -1 };
+  const ratio = Math.abs(d1 - d2) / Math.max(d1, d2);
+  // Perspektifte iki kenar belirgin biçimde farklı olabilir; eşik geniş tutulur,
+  // ayıklama sıralama skoru ve sonraki aşamalarla yapılır.
+  if (ratio > 0.62) return { ok: false, reason: `kenar oranı bozuk (${ratio.toFixed(2)})`, score: -1 };
+  const cos = (d1 * d1 + d2 * d2 - d3 * d3) / (2 * d1 * d2);
+  if (Math.abs(cos) > 0.62) return { ok: false, reason: `köşe dik değil (cos=${cos.toFixed(2)})`, score: -1 };
+  const modSpread = Math.max(tl.mod, tr.mod, bl.mod) / Math.min(tl.mod, tr.mod, bl.mod);
+  if (modSpread > 3.0) return { ok: false, reason: `modül boyutları tutarsız (${modSpread.toFixed(2)})`, score: -1 };
+  const detections = (tl.count || 1) + (tr.count || 1) + (bl.count || 1);
+  const score = (1 - Math.max(ratio, Math.abs(cos))) * (1 / modSpread) + Math.min(detections, 60) / 600;
+  return { ok: true, d1, d2, d3, cos, ratio, confidence: 1 - Math.max(ratio, Math.abs(cos)), score };
+}
 
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-    });
-    video.srcObject = stream;
-    await video.play();
-
-    scanning = true;
-    scanLine.style.display = 'block';
-    btnCam.textContent = 'Durdur';
-    btnCam.disabled = false;
-    setStatus('QR kodu kameraya gösterin');
-    raf = requestAnimationFrame(tick);
-  } catch(e) {
-    btnCam.disabled = false;
-    const msg = e.name === 'NotAllowedError' ? 'Kamera izni reddedildi'
-              : e.name === 'NotFoundError'   ? 'Kamera bulunamadı'
-              : 'Kamera hatası: ' + e.message;
-    setStatus(msg, 'err');
+/** Timing pattern üzerinden modül sayısını sayar (versiyon doğrulaması). */
+function countTimingModules(bin, w, h, from, to) {
+  const steps = Math.ceil(dist(from, to));
+  if (steps < 4) return null;
+  let transitions = 0, prev = -1, first = -1, last = -1;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = Math.round(from.x + (to.x - from.x) * t);
+    const y = Math.round(from.y + (to.y - from.y) * t);
+    if (x < 0 || x >= w || y < 0 || y >= h) return null;
+    const v = bin[y * w + x];
+    if (prev === -1) { prev = v; first = i; }
+    else if (v !== prev) { transitions++; prev = v; last = i; }
   }
+  if (transitions < 4) return null;
+  return { transitions, modules: transitions + 1 };
 }
 
-function stopCamera() {
-  scanning = false;
-  cancelAnimationFrame(raf);
-  stream?.getTracks().forEach(t => t.stop());
-  stream = null;
-  video.srcObject = null;
-  scanLine.style.display = 'none';
-  btnCam.textContent = 'Kamerayı Aç';
-  setStatus('Kamera kapalı');
-}
+/**
+ * Versiyon tahmini: finder mesafesi + timing pattern doğrulaması.
+ * @returns {{version:number, size:number, source:string, candidates:Array}}
+ */
+function estimateVersion(bin, w, h, tl, tr, bl) {
+  const modAvg = (tl.mod + tr.mod + bl.mod) / 3;
+  const dTop = dist(tl, tr), dLeft = dist(tl, bl);
+  const modTop = dTop / ((sizeGuess(dTop, modAvg)) - 7);
+  const raw = ((dTop / modAvg) + (dLeft / modAvg)) / 2 + 7;
+  let version = Math.round((raw - 17) / 4);
+  version = Math.max(1, Math.min(40, version));
 
-function tick() {
-  if (!scanning) return;
+  const candidates = [];
+  for (let v = Math.max(1, version - 2); v <= Math.min(40, version + 2); v++) {
+    const size = sizeForVersion(v);
+    const expectedMod = ((dTop + dLeft) / 2) / (size - 7);
+    const err = Math.abs(expectedMod - modAvg) / modAvg;
+    candidates.push({ version: v, size, expectedMod, err });
+  }
+  candidates.sort((a, b) => a.err - b.err);
 
-  if (!cooldown && video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-    
-    // CPU DARBOĞAZINI ÇÖZMEK İÇİN GÖRÜNTÜ ÖLÇEKLENDİRME:
-    // Video 1080p gelse bile tarayıcıyı kitlememek için Canvas maksimum 600px genişlikte çalıştırılır.
-    const maxDimension = 600;
-    let vw = video.videoWidth;
-    let vh = video.videoHeight;
-    
-    if (vw > maxDimension) {
-      vh = Math.floor(vh * (maxDimension / vw));
-      vw = maxDimension;
+  // Timing pattern ile doğrula: TL ve TR finder merkezleri arasındaki 6. satır
+  let source = 'finder-distance';
+  const best = candidates[0];
+  const size0 = best.size;
+  const ex = (tr.x - tl.x) / (size0 - 7), ey = (tr.y - tl.y) / (size0 - 7);
+  const fx = (bl.x - tl.x) / (size0 - 7), fy = (bl.y - tl.y) / (size0 - 7);
+  const p = (mx, my) => ({ x: tl.x + (mx - 3.5) * ex + (my - 3.5) * fx, y: tl.y + (mx - 3.5) * ey + (my - 3.5) * fy });
+  const timing = countTimingModules(bin, w, h, p(7.5, 6.5), p(size0 - 7.5, 6.5));
+  if (timing) {
+    const measured = timing.modules + 14;  // timing bölgesi + iki finder+separator
+    const vTiming = Math.round((measured - 17) / 4);
+    const match = candidates.find(c => c.version === vTiming);
+    if (match && vTiming >= 1 && vTiming <= 40) {
+      source = 'timing-verified';
+      candidates.sort((a, b) => (a.version === vTiming ? -1 : 0) - (b.version === vTiming ? -1 : 0));
     }
-    
-    canvas.width  = vw || 640;
-    canvas.height = vh || 480;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  }
+  return { version: candidates[0].version, size: candidates[0].size, source, candidates, modAvg };
+}
+function sizeGuess(d, mod) { return Math.round(d / mod) + 7; }
 
-    frameCount++;
-    if (frameCount % 3 === 0) {
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const result = QRDecoder.decode(imageData);
-      if (result) {
-        onFound(result);
-        return;
+/* ---------- Alignment pattern ---------- */
+
+/**
+ * Alignment pattern'in merkezi TEK siyah modüldür ve beyaz halka ile çevrilidir:
+ * yatay kesit beyaz-siyah-beyaz (1:1:1) verir. Tahmini konum etrafında bunu arar.
+ */
+function findAlignment(bin, w, h, estX, estY, modSize) {
+  const r = Math.max(5, Math.round(modSize * 3.5));
+  const x0 = Math.max(0, Math.round(estX - r)), x1 = Math.min(w - 1, Math.round(estX + r));
+  const y0 = Math.max(0, Math.round(estY - r)), y1 = Math.min(h - 1, Math.round(estY + r));
+  if (x1 - x0 < 3 || y1 - y0 < 3) return null;
+
+  const results = [];
+  const record = (endX, s, y) => {
+    if (!alignRatioOK(s, modSize)) return;
+    const cx = endX - s[2] - s[1] / 2;
+    const cxi = Math.round(cx);
+    if (cxi < 0 || cxi >= w) return;
+    const cy = alignCrossCheckVertical(bin, w, h, cxi, y, modSize);
+    if (isNaN(cy)) return;
+    results.push({ x: cx, y: cy });
+  };
+
+  for (let y = y0; y <= y1; y++) {
+    const s = [0, 0, 0];
+    let state = 0;                 // 0 = beyaz, 1 = siyah, 2 = beyaz
+    for (let x = x0; x <= x1; x++) {
+      if (bin[y * w + x]) {        // siyah
+        if (state === 1) s[1]++;
+        else if (state === 2) {
+          record(x, s, y);
+          s[0] = s[2]; s[1] = 1; s[2] = 0; state = 1;
+        } else { state++; s[state]++; }
+      } else {                     // beyaz
+        if (state === 1) state++;
+        s[state]++;
+      }
+    }
+    if (state === 2) record(x1 + 1, s, y);
+  }
+  if (!results.length) return null;
+
+  // Aynı merkezin çok sayıda tespiti -> kümele, tahmine en yakınını seç
+  const clusters = [];
+  for (const p of results) {
+    let placed = false;
+    for (const c of clusters) {
+      if (Math.hypot(c.x - p.x, c.y - p.y) < modSize) {
+        c.x = (c.x * c.n + p.x) / (c.n + 1);
+        c.y = (c.y * c.n + p.y) / (c.n + 1);
+        c.n++; placed = true; break;
+      }
+    }
+    if (!placed) clusters.push({ x: p.x, y: p.y, n: 1 });
+  }
+  let best = null, bestD = Infinity;
+  for (const c of clusters) {
+    const d = Math.hypot(c.x - estX, c.y - estY);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return bestD <= r ? { x: best.x, y: best.y, count: best.n } : null;
+}
+
+function alignRatioOK(s, modSize) {
+  const maxDev = modSize / 2;
+  return Math.abs(s[0] - modSize) < maxDev &&
+         Math.abs(s[1] - modSize) < maxDev &&
+         Math.abs(s[2] - modSize) < maxDev;
+}
+
+function alignCrossCheckVertical(bin, w, h, cx, cy, modSize) {
+  if (!bin[cy * w + cx]) return NaN;          // merkez siyah olmalı
+  const maxC = Math.ceil(modSize * 2);
+  let y = cy, up = 0;
+  while (y >= 0 && bin[y * w + cx] && up <= maxC) { up++; y--; }
+  if (up > maxC) return NaN;
+  let upW = 0;
+  while (y >= 0 && !bin[y * w + cx] && upW <= maxC) { upW++; y--; }
+  y = cy + 1;
+  let dn = 0;
+  while (y < h && bin[y * w + cx] && dn <= maxC) { dn++; y++; }
+  if (dn > maxC) return NaN;
+  let dnW = 0;
+  while (y < h && !bin[y * w + cx] && dnW <= maxC) { dnW++; y++; }
+  const s = [upW, up + dn, dnW];
+  if (!alignRatioOK(s, modSize)) return NaN;
+  return cy + (dn - up + 1) / 2;
+}
+
+/* ---------- Homography ---------- */
+
+/**
+ * src (4 nokta) -> dst (4 nokta) eşlemesi için 3x3 homography.
+ * Doğrudan lineer sistem: h8 = 1 kabul edilir, 8x8 çözülür.
+ */
+function computeHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [sx, sy] = src[i], [dx, dy] = dst[i];
+    A.push([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy]); b.push(dx);
+    A.push([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy]); b.push(dy);
+  }
+  const n = 8;
+  // Gauss elimination with partial pivoting on augmented matrix
+  for (let i = 0; i < n; i++) A[i].push(b[i]);
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    if (Math.abs(A[piv][col]) < 1e-12) return null;
+    [A[col], A[piv]] = [A[piv], A[col]];
+    const f = A[col][col];
+    for (let c = col; c <= n; c++) A[col][c] /= f;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = A[r][col];
+      if (!factor) continue;
+      for (let c = col; c <= n; c++) A[r][c] -= factor * A[col][c];
+    }
+  }
+  const H = new Float64Array(9);
+  for (let i = 0; i < 8; i++) H[i] = A[i][n];
+  H[8] = 1;
+  return H;
+}
+
+function mat3mul(A, B) {
+  const C = new Float64Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    let s = 0;
+    for (let k = 0; k < 3; k++) s += A[i * 3 + k] * B[k * 3 + j];
+    C[i * 3 + j] = s;
+  }
+  return C;
+}
+
+/**
+ * 4'ten fazla nokta için normalize edilmiş DLT + en küçük kareler.
+ * Çok sayıda alignment pattern kullanıldığında yüksek versiyonlarda
+ * ızgara kaymasını ortadan kaldırır.
+ */
+function computeHomographyLS(src, dst) {
+  const n = src.length;
+  if (n < 4) return null;
+  if (n === 4) return computeHomography(src, dst);
+
+  const norm = pts => {
+    let mx = 0, my = 0;
+    for (const p of pts) { mx += p[0]; my += p[1]; }
+    mx /= pts.length; my /= pts.length;
+    let d = 0;
+    for (const p of pts) d += Math.hypot(p[0] - mx, p[1] - my);
+    d /= pts.length;
+    const s = d > 1e-9 ? Math.SQRT2 / d : 1;
+    return { mx, my, s, out: pts.map(p => [(p[0] - mx) * s, (p[1] - my) * s]) };
+  };
+  const S = norm(src), D = norm(dst);
+
+  const ATA = new Float64Array(64), ATb = new Float64Array(8);
+  const acc = (row, rhs) => {
+    for (let i = 0; i < 8; i++) {
+      ATb[i] += row[i] * rhs;
+      for (let j = 0; j < 8; j++) ATA[i * 8 + j] += row[i] * row[j];
+    }
+  };
+  for (let i = 0; i < n; i++) {
+    const [sx, sy] = S.out[i], [dx, dy] = D.out[i];
+    acc([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy], dx);
+    acc([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy], dy);
+  }
+  // 8x8 çöz
+  const M = [];
+  for (let i = 0; i < 8; i++) {
+    const r = [];
+    for (let j = 0; j < 8; j++) r.push(ATA[i * 8 + j]);
+    r.push(ATb[i]);
+    M.push(r);
+  }
+  for (let col = 0; col < 8; col++) {
+    let piv = col;
+    for (let r = col + 1; r < 8; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    if (Math.abs(M[piv][col]) < 1e-14) return null;
+    [M[col], M[piv]] = [M[piv], M[col]];
+    const f = M[col][col];
+    for (let c = col; c <= 8; c++) M[col][c] /= f;
+    for (let r = 0; r < 8; r++) {
+      if (r === col) continue;
+      const factor = M[r][col];
+      if (!factor) continue;
+      for (let c = col; c <= 8; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  const Hn = new Float64Array(9);
+  for (let i = 0; i < 8; i++) Hn[i] = M[i][8];
+  Hn[8] = 1;
+
+  const Ts = new Float64Array([S.s, 0, -S.mx * S.s, 0, S.s, -S.my * S.s, 0, 0, 1]);
+  const TdInv = new Float64Array([1 / D.s, 0, D.mx, 0, 1 / D.s, D.my, 0, 0, 1]);
+  const H = mat3mul(TdInv, mat3mul(Hn, Ts));
+  if (Math.abs(H[8]) < 1e-12) return null;
+  for (let i = 0; i < 9; i++) H[i] /= H[8];
+  return H;
+}
+
+function applyH(H, x, y) {
+  const d = H[6] * x + H[7] * y + H[8];
+  if (Math.abs(d) < 1e-12) return [NaN, NaN];
+  return [(H[0] * x + H[1] * y + H[2]) / d, (H[3] * x + H[4] * y + H[5]) / d];
+}
+
+/** Tüm eşleşmeler üzerindeki RMS artık (piksel). */
+function residualRMS(H, src, dst) {
+  let sum = 0;
+  for (let i = 0; i < src.length; i++) {
+    const [x, y] = applyH(H, src[i][0], src[i][1]);
+    if (!isFinite(x) || !isFinite(y)) return Infinity;
+    const dx = x - dst[i][0], dy = y - dst[i][1];
+    sum += dx * dx + dy * dy;
+  }
+  return Math.sqrt(sum / src.length);
+}
+
+/** Homography'nin verilen kaynak noktaları hedefe taşıdığını doğrular. */
+function verifyHomography(H, src, dst, tol = 0.75) {
+  let maxErr = 0;
+  for (let i = 0; i < src.length; i++) {
+    const [x, y] = applyH(H, src[i][0], src[i][1]);
+    if (!isFinite(x) || !isFinite(y)) return { ok: false, error: Infinity };
+    maxErr = Math.max(maxErr, Math.hypot(x - dst[i][0], y - dst[i][1]));
+  }
+  return { ok: maxErr <= tol, error: maxErr };
+}
+
+/* ---------- Modül örnekleme ---------- */
+
+const SAMPLE_OFFSETS = [
+  [0, 0, 3],
+  [-0.26, 0, 2], [0.26, 0, 2], [0, -0.26, 2], [0, 0.26, 2],
+  [-0.26, -0.26, 1], [0.26, -0.26, 1], [-0.26, 0.26, 1], [0.26, 0.26, 1]
+];
+const SAMPLE_OFFSETS_TIGHT = [
+  [0, 0, 3], [-0.18, 0, 1], [0.18, 0, 1], [0, -0.18, 1], [0, 0.18, 1]
+];
+const SAMPLE_OFFSETS_TINY = [[0, 0, 1]];
+
+/** H'den ortalama modül boyutunu (piksel) tahmin eder. */
+function moduleSizeFromH(H, size) {
+  const a = applyH(H, 0.5, 0.5), b = applyH(H, size - 0.5, 0.5), c = applyH(H, 0.5, size - 0.5);
+  if (!isFinite(a[0]) || !isFinite(b[0]) || !isFinite(c[0])) return 0;
+  const dx = Math.hypot(b[0] - a[0], b[1] - a[1]) / (size - 1);
+  const dy = Math.hypot(c[0] - a[0], c[1] - a[1]) / (size - 1);
+  return (dx + dy) / 2;
+}
+
+/**
+ * Her modülü alan olarak örnekler: merkez ağırlıklı çoklu piksel + çoğunluk oyu.
+ * @returns {{matrix:Uint8Array, confidence:Float32Array, lowCount:number, outside:number}}
+ */
+function sampleGrid(bin, w, h, H, size) {
+  const matrix = new Uint8Array(size * size);
+  const confidence = new Float32Array(size * size);
+  let lowCount = 0, outside = 0;
+  /* Örnekleme ayak izi modül boyutuna uyarlanır: küçük modüllerde geniş
+     bir ayak izi komşu modüle taşar ve bit'i bozar. */
+  const modPx = moduleSizeFromH(H, size);
+  const OFFS = modPx >= 6 ? SAMPLE_OFFSETS : (modPx >= 3 ? SAMPLE_OFFSETS_TIGHT : SAMPLE_OFFSETS_TINY);
+  const totalWeight = OFFS.reduce((a, o) => a + o[2], 0);
+
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      let black = 0, seen = 0;
+      for (const [dx, dy, wt] of OFFS) {
+        const [px, py] = applyH(H, c + 0.5 + dx, r + 0.5 + dy);
+        const xi = Math.round(px), yi = Math.round(py);
+        if (xi < 0 || xi >= w || yi < 0 || yi >= h) continue;
+        seen += wt;
+        if (bin[yi * w + xi]) black += wt;
+      }
+      const idx = r * size + c;
+      if (seen === 0) { matrix[idx] = 0; confidence[idx] = 0; outside++; continue; }
+      const ratio = black / seen;
+      matrix[idx] = ratio > 0.5 ? 1 : 0;
+      const conf = Math.abs(ratio - 0.5) * 2 * (seen / totalWeight);
+      confidence[idx] = conf;
+      if (conf < 0.4) lowCount++;
+    }
+  }
+  return { matrix, confidence, lowCount, outside };
+}
+
+/* ---------- Tam pipeline ---------- */
+
+/**
+ * Bir görüntüden QR çözer. Hiçbir zaman exception atmaz.
+ * @returns {{ok, text, stages:Array<{stage,ok,reason,confidence}>, debug}}
+ */
+function decodeImage(imageData, opts = {}) {
+  const w = imageData.width, h = imageData.height;
+  const stages = [];
+  const push = (stage, ok, reason, extra) => { stages.push(Object.assign({ stage, ok, reason: reason || '' }, extra || {})); };
+  const debug = { w, h, bin: null, finders: [], triangle: null, corners: null, lowConfidence: [], size: 0 };
+
+  const gray = toGray(imageData.data, w, h);
+  push('FRAME', true, `${w}x${h}`);
+
+  /* Zaman bütçesi: gürültülü/QR'sız karelerde onlarca sahte finder adayı
+     çıkabilir. Kombinatoryal patlamayı sınırlamak için sert bir üst sınır. */
+  const budget = opts.timeBudgetMs === undefined ? 1500 : opts.timeBudgetMs;
+  const deadline = budget > 0 ? Date.now() + budget : Infinity;
+  const outOfTime = () => Date.now() > deadline;
+  const MAX_TRIPLES = opts.maxTriples || 8;
+
+  /* Binarization stratejileri, ampirik başarı sırasına göre.
+     Geniş pencere + yüksek bias, verilen problemli görüntüyü çözebilen
+     TEK strateji; dar pencere ise güçlü gölgede öne çıkıyor.
+     strategyOffset ile kareler arasında döndürülür: böylece kamera
+     akışında küçük bir zaman bütçesiyle de tüm stratejiler denenmiş olur. */
+  let strategies = opts.strategies || [
+    { method: 'local', window: Math.max(10, Math.round(Math.min(w, h) / 12)), bias: 0.98 },
+    { method: 'local', window: Math.max(6, Math.round(Math.min(w, h) / 24)), bias: 0.92 },
+    { method: 'global', bias: 1.0 },
+    { method: 'local', window: Math.max(4, Math.round(Math.min(w, h) / 40)), bias: 0.85 }
+  ];
+  const off = (opts.strategyOffset | 0) % strategies.length;
+  if (off) strategies = strategies.slice(off).concat(strategies.slice(0, off));
+
+  /* Hata raporlaması: en SON denenen aday değil, boru hattında EN DERİN
+     ilerleyen deneme raporlanır. Aksi hâlde teşhis yanıltıcı olur. */
+  const STAGE_RANK = { FINDER: 1, GEOMETRY: 2, VERSION: 3, HOMOGRAPHY: 4, GRID: 5, FORMAT: 6, RS: 7, SEGMENT: 8 };
+  let lastFail = { stage: 'FINDER', reason: 'finder pattern bulunamadı', rank: 1 };
+  const fail = (stage, reason, extra) => {
+    const rank = STAGE_RANK[stage] || 0;
+    if (rank >= lastFail.rank) lastFail = Object.assign({ stage, reason, rank }, extra || {});
+  };
+
+  for (let si = 0; si < strategies.length; si++) {
+    if (outOfTime()) { fail('FINDER', 'zaman bütçesi doldu'); break; }
+    const st = strategies[si];
+    const bin = st.method === 'global'
+      ? binarizeGlobal(gray, w, h, st)
+      : binarizeLocal(gray, w, h, st);
+    if (si === 0 || !debug.bin) debug.bin = bin;
+
+    const finders = detectFinders(bin, w, h);
+    if (si === 0) debug.finders = finders;
+    if (finders.length < 3) {
+      fail('FINDER', `yalnızca ${finders.length} finder adayı`);
+      continue;
+    }
+
+    // Gürültüde onlarca tek-vuruşluk aday çıkar; çoklu tespit edilenleri tercih et
+    let usable = finders;
+    if (finders.length > 8) {
+      const strong = finders.filter(f => f.count >= 2);
+      if (strong.length >= 3) usable = strong;
+    }
+    // en güçlü 6 adaydan tüm üçlüler, geometri skoruna göre sıralı
+    const pool = usable.slice(0, 6);
+    const ranked = [];
+    for (let i = 0; i < pool.length - 2; i++)
+      for (let j = i + 1; j < pool.length - 1; j++)
+        for (let k = j + 1; k < pool.length; k++) {
+          const ord = orderFinders([pool[i], pool[j], pool[k]]);
+          const val = validateTriangle(ord.tl, ord.tr, ord.bl);
+          if (!val.ok) { fail('GEOMETRY', val.reason); continue; }
+          ranked.push({ ord, val });
+        }
+    ranked.sort((a, b) => b.val.score - a.val.score);
+
+    for (const { ord, val } of ranked.slice(0, MAX_TRIPLES)) {
+      if (outOfTime()) { fail('GEOMETRY', 'zaman bütçesi doldu'); break; }
+      const { tl, tr, bl } = ord;
+      debug.finders = finders;
+      debug.triangle = { tl, tr, bl };
+
+      const est = estimateVersion(bin, w, h, tl, tr, bl);
+      const versionsToTry = [est.version];
+      for (const c of est.candidates) if (!versionsToTry.includes(c.version)) versionsToTry.push(c.version);
+
+      for (const version of versionsToTry.slice(0, 3)) {
+        if (outOfTime()) { fail('VERSION', 'zaman bütçesi doldu'); break; }
+        const size = sizeForVersion(version);
+
+        // Modül eksenleri (finder merkezleri arası (size-7) modül)
+        const ex = (tr.x - tl.x) / (size - 7), ey = (tr.y - tl.y) / (size - 7);
+        const fx = (bl.x - tl.x) / (size - 7), fy = (bl.y - tl.y) / (size - 7);
+        const modPoint = (mx, my) => [tl.x + (mx - 3.5) * ex + (my - 3.5) * fx,
+                                      tl.y + (mx - 3.5) * ey + (my - 3.5) * fy];
+
+        // 4. referans: alignment pattern (v>=2). Yoksa afin köşe.
+        const srcQuad = [[3.5, 3.5], [size - 3.5, 3.5], [3.5, size - 3.5]];
+        const dstQuad = [[tl.x, tl.y], [tr.x, tr.y], [bl.x, bl.y]];
+        let alignUsed = null;
+
+        if (version >= 2) {
+          const ap = ALIGNMENT_POS[version];
+          const am = ap[ap.length - 1] + 0.5;   // son alignment merkezi (modül koordinatı)
+          const [ex0, ey0] = modPoint(am, am);
+          const found = findAlignment(bin, w, h, ex0, ey0, est.modAvg);
+          if (found) {
+            alignUsed = found;
+            srcQuad.push([am, am]);
+            dstQuad.push([found.x, found.y]);
+          }
+        }
+        if (srcQuad.length === 3) {
+          srcQuad.push([size - 3.5, size - 3.5]);
+          dstQuad.push([tr.x + bl.x - tl.x, tr.y + bl.y - tl.y]);
+        }
+
+        let H = computeHomography(srcQuad, dstQuad);
+        if (!H) { fail('HOMOGRAPHY', 'tekil matris'); continue; }
+        let ver = verifyHomography(H, srcQuad, dstQuad);
+        if (!ver.ok) { fail('HOMOGRAPHY', `geri dönüş hatası ${ver.error.toFixed(2)}px`); continue; }
+
+        /* --- Izgara iyileştirme: tüm alignment pattern'leri bul ve
+               homography'yi en küçük karelerle yeniden çöz. Yüksek
+               versiyonlarda 4 nokta ızgara kaymasını önlemeye yetmez. --- */
+        let alignCount = 0;
+        if (version >= 2) {
+          const ap = ALIGNMENT_POS[version];
+          let bestH = H, bestScore = -Infinity;
+          for (let pass = 0; pass < 3; pass++) {
+            if (outOfTime()) break;
+            const sPts = srcQuad.slice(0, 3), dPts = dstQuad.slice(0, 3);
+            let found = 0;
+            for (const ay of ap) {
+              for (const ax of ap) {
+                if ((ax === 6 && ay === 6) || (ax === 6 && ay === size - 7) || (ax === size - 7 && ay === 6)) continue;
+                const gx = ax + 0.5, gy = ay + 0.5;
+                const [px, py] = applyH(H, gx, gy);
+                if (!isFinite(px) || px < 0 || px >= w || py < 0 || py >= h) continue;
+                // Yerel modül boyutu: perspektifte görüntünün her yerinde aynı değildir
+                const [nx, ny] = applyH(H, gx + 1, gy);
+                const localMod = isFinite(nx) ? Math.hypot(nx - px, ny - py) : est.modAvg;
+                const hit = findAlignment(bin, w, h, px, py, localMod > 1.5 ? localMod : est.modAvg);
+                if (hit) { sPts.push([gx, gy]); dPts.push([hit.x, hit.y]); found++; }
+              }
+            }
+            if (found === 0 || sPts.length < 4) break;
+            const H2 = sPts.length === 4 ? computeHomography(sPts, dPts) : computeHomographyLS(sPts, dPts);
+            if (!H2) break;
+            /* Kabul ölçütü TÜM eşleşmeler üzerindeki RMS artıktır.
+               Yalnız finder merkezlerine bakmak yanıltıcıdır: ilk geçişte
+               finder artığı büyük görünse de sonraki geçiş yakınsar. */
+            const rms = residualRMS(H2, sPts, dPts);
+            if (!isFinite(rms)) break;
+            H = H2;
+            const score = found - rms;
+            if (score > bestScore) { bestScore = score; bestH = H2; alignCount = found; }
+            if (found === (ap.length * ap.length - 3) && rms < 0.5) break;
+          }
+          H = bestH;
+        }
+
+        debug.corners = [applyH(H, 0, 0), applyH(H, size, 0), applyH(H, size, size), applyH(H, 0, size)];
+        debug.size = size;
+
+        const sampled = sampleGrid(bin, w, h, H, size);
+        if (sampled.outside > size * size * 0.1) {
+          fail('GRID', `${sampled.outside} modül görüntü dışında`);
+          continue;
+        }
+        debug.confidence = sampled.confidence;
+        debug.homography = H;
+        debug.lowConfidence = [];
+        for (let i = 0; i < size * size; i++) if (sampled.confidence[i] < 0.4) debug.lowConfidence.push(i);
+
+        const logs = [];
+        let res = decodeMatrix(sampled.matrix, size, { log: m => logs.push(m) });
+        let mirrored = false;
+        if (!res.ok) {
+          // aynalanmış QR ihtimali: transpoze dene
+          const t = new Uint8Array(size * size);
+          for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) t[c * size + r] = sampled.matrix[r * size + c];
+          const res2 = decodeMatrix(t, size, { log: () => {} });
+          if (res2.ok) { res = res2; mirrored = true; }
+        }
+
+        if (res.ok) {
+          push('BINARIZATION', true, `${st.method} window=${st.window || '-'} bias=${st.bias}`);
+          push('FINDER', true, `${finders.length} aday -> 3 küme`);
+          push('GEOMETRY', true, `cos=${val.cos.toFixed(3)}`, { confidence: val.confidence });
+          push('VERSION', true, `v${version} (${est.source})`);
+          push('HOMOGRAPHY', true, `hata ${ver.error.toFixed(3)}px, ${alignCount} alignment pattern ile iyileştirildi`);
+          push('GRID', true, `${size}x${size}, düşük güven ${sampled.lowCount}`);
+          for (const l of logs) push('FORMAT', true, l);
+          push('MASK', true, `mask ${res.mask}`);
+          push('CODEWORDS', true, `${res.codewordCount}/${res.codewordCount}, remainder ${res.remainderBits} bit`);
+          for (const b of res.blockReports) push(`RS BLOCK ${b.block}`, true, `${b.errors}/${b.capacity} hata düzeltildi`);
+          push('SEGMENT', true, res.segments.map(s => `${s.mode}${s.length !== undefined ? ' ' + s.length : ''}`).join(' + '));
+          push('RESULT', true, mirrored ? 'BAŞARILI (aynalanmış)' : 'BAŞARILI');
+
+          return Object.assign({ ok: true, stages, debug, mirrored, strategy: st, strategyIndex: (si + off) % 4 }, res);
+        }
+        fail(res.stage || 'RS', res.reason, { format: res.format, formatLog: logs.join(' | ') });
       }
     }
   }
 
-  raf = requestAnimationFrame(tick);
+  push('RESULT', false, `${lastFail.stage}: ${lastFail.reason}`);
+  return { ok: false, text: null, stage: lastFail.stage, reason: lastFail.reason, stages, debug };
 }
 
-function onFound(text) {
-  cooldown = true;
-  flash.classList.add('show');
-  setStatus('✓ Okundu — sunucuya gönderiliyor…', 'ok');
+/* ============================================================
+   BÖLÜM 5 — SELF TEST
+   Uygulama açılışında çalışır. Testler geçmeden kamera decoder'ı
+   etkinleştirilmez.
+   ============================================================ */
 
-  const isDup = results[0]?.text === text;
-  if (!isDup) {
-    const time = new Date().toLocaleTimeString('tr-TR');
-    results.unshift({ text, time });
-    if (results.length > 20) results.pop();
-    renderHistory();
+/* --- Test görüntüsü üretimi (yalnızca test için) --- */
+function _render(matrix, size, scale, quiet) {
+  const w = (size + 2 * quiet) * scale;
+  const data = new Uint8ClampedArray(w * w * 4).fill(255);
+  for (let y = 0; y < w; y++) {
+    for (let x = 0; x < w; x++) {
+      const mx = Math.floor(x / scale) - quiet, my = Math.floor(y / scale) - quiet;
+      let v = 255;
+      if (mx >= 0 && mx < size && my >= 0 && my < size) v = matrix[my * size + mx] ? 0 : 255;
+      const p = (y * w + x) * 4;
+      data[p] = data[p + 1] = data[p + 2] = v; data[p + 3] = 255;
+    }
   }
-
-  sendToServer(text);
-
-  setTimeout(() => {
-    flash.classList.remove('show');
-    if (scanning) setStatus('QR kodu kameraya gösterin');
-    setTimeout(() => { cooldown = false; raf = requestAnimationFrame(tick); }, 800);
-  }, 1500);
+  return { width: w, height: w, data };
 }
-
-/* ── Sunucu entegrasyonu ── */
-
-/**
- * Karekod yükünü sorguya çevirir.
- *
- * Yük iki biçimden biridir: doğrudan belge özeti ya da doğrulama adresi
- * (`https://.../dogrula/DOC-123`). Adresin son parçası belge numarasıdır.
- * Yükü olduğu gibi "hash" diye göndermek, adresle gelen her belgeyi
- * "kayıtlı değil" yapardı.
- */
-function toQuery(text) {
-  const raw = String(text || '').trim();
-  if (/^[0-9a-fA-F]{32,128}$/.test(raw)) return { hash: raw.toLowerCase() };
-
-  try {
-    const url = new URL(raw);
-    const last = url.pathname.split('/').filter(Boolean).pop() || '';
-    if (/^[0-9a-fA-F]{32,128}$/.test(last)) return { hash: last.toLowerCase() };
-    if (last) return { docNo: last };
-  } catch { /* adres değil */ }
-
-  return { docNo: raw.slice(0, 128) };
-}
-
-/**
- * Dosyanın kendisini gönderir — özet SUNUCUDA hesaplanır.
- *
- * Karekod nakli saldırısını kapatan tek yol budur: kimliğe değil, elinizdeki
- * baytlara bakılır.
- */
-function verifyFile(file) {
-  if (!file) return;
-  if (file.size > 8 * 1024 * 1024) {
-    setStatus('Dosya çok büyük (en fazla 8 MB).', 'err');
-    return;
+function _warp(img, corners, outW, outH) {
+  const src = [[0, 0], [img.width, 0], [img.width, img.height], [0, img.height]];
+  const H = computeHomography(corners, src);
+  const data = new Uint8ClampedArray(outW * outH * 4).fill(255);
+  for (let y = 0; y < outH; y++) {
+    for (let x = 0; x < outW; x++) {
+      const [sx, sy] = applyH(H, x + 0.5, y + 0.5);
+      let v = 255;
+      if (sx >= 0 && sx < img.width - 1 && sy >= 0 && sy < img.height - 1) {
+        const x0 = sx | 0, y0 = sy | 0, fx = sx - x0, fy = sy - y0;
+        const g = (xx, yy) => img.data[(yy * img.width + xx) * 4];
+        v = g(x0, y0) * (1 - fx) * (1 - fy) + g(x0 + 1, y0) * fx * (1 - fy) +
+            g(x0, y0 + 1) * (1 - fx) * fy + g(x0 + 1, y0 + 1) * fx * fy;
+      }
+      const p = (y * outW + x) * 4;
+      data[p] = data[p + 1] = data[p + 2] = v; data[p + 3] = 255;
+    }
   }
-  setStatus('Dosya doğrulanıyor…', 'busy');
-
-  const reader = new FileReader();
-  reader.onerror = () => setStatus('Dosya okunamadı.', 'err');
-  reader.onload = () => {
-    const b64 = String(reader.result).split(',')[1] || '';
-    post({ pdf: b64 });
+  return { width: outW, height: outH, data };
+}
+function _blur(img, radius) {
+  const w = img.width, h = img.height;
+  let cur = new Float32Array(w * h);
+  for (let i = 0; i < cur.length; i++) cur[i] = img.data[i * 4];
+  for (let p = 0; p < 2; p++) {
+    const tmp = new Float32Array(cur.length);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0, n = 0;
+      for (let d = -radius; d <= radius; d++) { const xx = x + d; if (xx >= 0 && xx < w) { s += cur[y * w + xx]; n++; } }
+      tmp[y * w + x] = s / n;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0, n = 0;
+      for (let d = -radius; d <= radius; d++) { const yy = y + d; if (yy >= 0 && yy < h) { s += tmp[yy * w + x]; n++; } }
+      cur[y * w + x] = s / n;
+    }
+  }
+  const data = new Uint8ClampedArray(w * h * 4).fill(255);
+  for (let i = 0; i < cur.length; i++) { data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = cur[i]; data[i * 4 + 3] = 255; }
+  return { width: w, height: h, data };
+}
+function _shadow(img, strength) {
+  const w = img.width, h = img.height;
+  const data = new Uint8ClampedArray(img.data);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const f = 1 - strength * ((x / w) * 0.5 + (y / h) * 0.5);
+    const p = (y * w + x) * 4;
+    const v = data[p] * f;
+    data[p] = data[p + 1] = data[p + 2] = v;
+  }
+  return { width: w, height: h, data };
+}
+function _rng(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  reader.readAsDataURL(file);
 }
 
-function sendToServer(data) {
-  post({ ...toQuery(data), ts: Date.now() });
-}
+const REMAINDER_REFERENCE = {
+  1: 0, 2: 7, 3: 7, 4: 7, 5: 7, 6: 7, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0, 13: 0,
+  14: 3, 15: 3, 16: 3, 17: 3, 18: 3, 19: 3, 20: 3, 21: 4, 22: 4, 23: 4, 24: 4, 25: 4,
+  26: 4, 27: 4, 28: 3, 29: 3, 30: 3, 31: 3, 32: 3, 33: 3, 34: 3, 35: 0, 36: 0, 37: 0,
+  38: 0, 39: 0, 40: 0
+};
 
-function post(payload) {
-  fetch('/api/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-  .then(r => r.json())
-  .then(res => {
-    // Karekodun söylediği ile dosyanın kendisi uyuşmuyorsa bu, en ciddi
-    // sonuçtur ve diğer durumların önüne geçer.
-    if (res.binding === 'mismatch') {
-      setStatus('✗ Karekod bu belgeye ait DEĞİL: ' + (res.message || ''), 'err');
-      return;
+function runSelfTests(log) {
+  const rng = _rng(0xC0FFEE);
+  const results = [];
+  let pass = 0, fail = 0;
+  const T = (name, fn) => {
+    let ok = false, detail = '';
+    try {
+      const r = fn();
+      if (r === true) ok = true; else detail = String(r);
+    } catch (e) { detail = e.message; }
+    ok ? pass++ : fail++;
+    results.push({ name, ok, detail });
+    log(`[SELF TEST] ${name}: ${ok ? 'PASS' : 'FAIL' + (detail ? ' — ' + detail : '')}`);
+    return ok;
+  };
+
+  /* ---- GF(256) ---- */
+  T('GF256', () => {
+    for (let i = 1; i < 256; i++) if (GF_EXP[GF_LOG[i]] !== i) return `exp/log tersleme i=${i}`;
+    for (let a = 1; a < 256; a++) {
+      if (gfMul(a, gfInv(a)) !== 1) return `ters a=${a}`;
+      for (let b = 1; b < 256; b += 17) if (gfDiv(gfMul(a, b), b) !== a) return `mul/div ${a},${b}`;
     }
-    // DÖRT CEVAP, DÖRT ANLAM. "Bilinmiyor" ile "geçersiz" aynı şey değildir
-    // ve kullanıcıya aynı şeymiş gibi gösterilmemelidir.
-    if (res.status === 'verified') {
-      const who = res.signer ? ' · ' + res.signer : '';
-      const when = res.signedAt ? ' · ' + new Date(res.signedAt).toLocaleString('tr-TR') : '';
-      // İDDİA, KANITIN ÖTESİNE GEÇMEMELİ. Dosya görülmediyse bu cevap
-      // elinizdeki belge hakkında değil, o kimliğe sahip belge hakkındadır.
-      const kesin = res.binding === 'computed';
-      setStatus((kesin ? '✓ Bu dosya kayıtlı ve geçerli' : '✓ Bu KİMLİK kayıtlı ve geçerli')
-        + who + when
-        + (kesin ? '' : ' — elinizdeki dosyayı doğrulamak için yükleyin'),
-        kesin ? 'ok' : 'busy');
-    } else if (res.status === 'invalid') {
-      setStatus('✗ Kayıtlı ama imza GEÇERSİZDİ: ' + (res.message || ''), 'err');
-    } else if (res.status === 'indeterminate') {
-      setStatus('! Kayıtlı ama karar verilemedi: ' + (res.message || ''), 'busy');
-    } else if (res.status === 'unverified') {
-      setStatus('? Bu belge kayıtlı değil — doğrulanamadı', 'busy');
-    } else if (res.status === 'unavailable') {
-      setStatus('? Doğrulama kaydı kullanılamıyor: ' + (res.message || ''), 'busy');
+    for (let a = 1; a < 256; a += 11) {
+      let acc = 1;
+      for (let n = 0; n < 10; n++) { if (gfPow(a, n) !== acc) return `pow ${a}^${n}`; acc = gfMul(acc, a); }
+    }
+    if (polyEval([1, 0, 0], 2) !== 4) return 'polyEval';
+    return true;
+  });
+
+  /* ---- Reed-Solomon A..E ---- */
+  const NSYMS = [7, 10, 13, 15, 17, 18, 20, 22, 24, 26, 28, 30];
+  const mkData = k => { const d = new Uint8Array(k); for (let i = 0; i < k; i++) d[i] = (rng() * 256) | 0; return d; };
+  const mkFull = (d, n) => { const e = rsEncode(d, n); const f = new Uint8Array(d.length + n); f.set(d); f.set(e, d.length); return f; };
+  const pick = (len, cnt) => {
+    const idx = []; const used = new Set();
+    while (idx.length < cnt) { const p = (rng() * len) | 0; if (!used.has(p)) { used.add(p); idx.push(p); } }
+    return idx;
+  };
+
+  T('Reed-Solomon A (hatasız)', () => {
+    for (let t = 0; t < 60; t++) {
+      const n = NSYMS[t % NSYMS.length], k = 1 + ((rng() * 60) | 0);
+      const d = mkData(k), r = rsDecode(mkFull(d, n), n);
+      if (!r.ok || r.errors !== 0) return `n=${n} ${r.reason || ''}`;
+      for (let i = 0; i < k; i++) if (r.data[i] !== d[i]) return 'veri değişti';
+    }
+    return true;
+  });
+  T('Reed-Solomon B (tek byte)', () => {
+    for (let t = 0; t < 80; t++) {
+      const n = NSYMS[t % NSYMS.length], k = 1 + ((rng() * 50) | 0);
+      const d = mkData(k), f = mkFull(d, n);
+      const c = Uint8Array.from(f); const p = (rng() * c.length) | 0;
+      c[p] ^= 1 + ((rng() * 255) | 0);
+      const r = rsDecode(c, n);
+      if (!r.ok) return `n=${n} ${r.reason}`;
+      for (let i = 0; i < k; i++) if (r.data[i] !== d[i]) return 'yanlış düzeltme';
+    }
+    return true;
+  });
+  T('Reed-Solomon C (çoklu byte)', () => {
+    for (let t = 0; t < 80; t++) {
+      const n = NSYMS[4 + (t % 8)], k = 5 + ((rng() * 40) | 0);
+      const d = mkData(k), f = mkFull(d, n);
+      const c = Uint8Array.from(f);
+      const ne = 2 + ((rng() * ((n >> 1) - 2)) | 0);
+      for (const p of pick(c.length, ne)) c[p] ^= 1 + ((rng() * 255) | 0);
+      const r = rsDecode(c, n);
+      if (!r.ok) return `${ne}/${n >> 1} hata: ${r.reason}`;
+      for (let i = 0; i < k; i++) if (r.data[i] !== d[i]) return 'yanlış düzeltme';
+    }
+    return true;
+  });
+  T('Reed-Solomon D (kapasitenin tam sınırı)', () => {
+    for (let t = 0; t < 80; t++) {
+      const n = NSYMS[t % NSYMS.length], k = 5 + ((rng() * 40) | 0);
+      const d = mkData(k), f = mkFull(d, n);
+      const c = Uint8Array.from(f);
+      const ne = n >> 1;
+      if (ne >= c.length) continue;
+      for (const p of pick(c.length, ne)) c[p] ^= 1 + ((rng() * 255) | 0);
+      const r = rsDecode(c, n);
+      if (!r.ok) return `t=${ne} sınırında düzeltemedi: ${r.reason}`;
+      for (let i = 0; i < k; i++) if (r.data[i] !== d[i]) return 'yanlış düzeltme';
+    }
+    return true;
+  });
+  T('Reed-Solomon E (kapasite aşımı -> kontrollü ret)', () => {
+    let silent = 0, total = 0;
+    for (let t = 0; t < 120; t++) {
+      const n = NSYMS[t % NSYMS.length], k = 20 + ((rng() * 30) | 0);
+      const d = mkData(k), f = mkFull(d, n);
+      const c = Uint8Array.from(f);
+      const ne = (n >> 1) + 1 + ((rng() * 3) | 0);
+      if (ne >= c.length) continue;
+      for (const p of pick(c.length, ne)) c[p] ^= 1 + ((rng() * 255) | 0);
+      const r = rsDecode(c, n); total++;
+      if (r.ok) {
+        let same = true;
+        for (let i = 0; i < k; i++) if (r.data[i] !== d[i]) same = false;
+        if (!same) silent++;
+      }
+    }
+    return silent === 0 ? true : `${silent}/${total} sessiz yanlış düzeltme`;
+  });
+
+  /* ---- Tablolar ---- */
+  T('QR tabloları (v1-40, L/M/Q/H)', () => {
+    for (let v = 1; v <= 40; v++) {
+      const cap = capacityOf(v);
+      if (cap.remainderBits !== REMAINDER_REFERENCE[v]) return `v${v} remainder ${cap.remainderBits} != ${REMAINDER_REFERENCE[v]}`;
+      for (const ec of EC_LEVELS) {
+        const [n, groups] = EC_BLOCKS[v][ec];
+        let nb = 0, dt = 0;
+        for (const [c, d] of groups) { nb += c; dt += c * d; }
+        if (dt + n * nb !== cap.totalCodewords) return `v${v}-${ec}: ${dt + n * nb} != ${cap.totalCodewords}`;
+      }
+    }
+    if (capacityOf(1).totalCodewords !== 26) return 'v1 toplam codeword != 26';
+    if (capacityOf(40).totalCodewords !== 3706) return 'v40 toplam codeword != 3706';
+    return true;
+  });
+
+  T('Format BCH(15,5)', () => {
+    const all = [];
+    for (let e = 0; e < 4; e++) for (let m = 0; m < 8; m++) all.push(formatInfoBits(e, m));
+    if (new Set(all).size !== 32) return 'çakışan format kelimesi';
+    let min = 99;
+    for (let i = 0; i < 32; i++) for (let j = i + 1; j < 32; j++) min = Math.min(min, popcount(all[i] ^ all[j]));
+    if (min !== 7) return `minimum uzaklık ${min} (7 olmalı)`;
+    // Bilinen değer: EC=Q, mask=1
+    if (formatInfoBits(EC_FORMAT_BITS.Q, 1) !== 0b011000001101000) return 'Q/mask1 referans değeri tutmuyor';
+    return true;
+  });
+
+  T('Versiyon bilgisi BCH(18,6)', () => {
+    const all = [];
+    for (let v = 7; v <= 40; v++) all.push(versionInfoBits(v));
+    let min = 99;
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) min = Math.min(min, popcount(all[i] ^ all[j]));
+    if (min !== 8) return `minimum uzaklık ${min} (8 olmalı)`;
+    if (versionInfoBits(7) !== 0x07C94) return 'v7 referans değeri tutmuyor';
+    return true;
+  });
+
+  T('Versiyon hesabı (boyut <-> versiyon)', () => {
+    for (let v = 1; v <= 40; v++) {
+      const s = sizeForVersion(v);
+      if (s !== 21 + 4 * (v - 1)) return `v${v} boyut ${s}`;
+      if ((s - 17) / 4 !== v) return `ters dönüşüm v${v}`;
+    }
+    return true;
+  });
+
+  T('Codeword interleaving', () => {
+    for (const [v, ec] of [[1, 'L'], [3, 'Q'], [5, 'H'], [5, 'L'], [10, 'M'], [17, 'Q'], [40, 'H']]) {
+      const [ecPer, groups] = EC_BLOCKS[v][ec];
+      const sizes = [];
+      for (const [c, d] of groups) for (let i = 0; i < c; i++) sizes.push(d);
+      const dataBlocks = sizes.map((n, bi) => {
+        const a = new Uint8Array(n);
+        for (let i = 0; i < n; i++) a[i] = (bi * 100 + i) & 0xff;
+        return a;
+      });
+      const eccBlocks = dataBlocks.map(b => rsEncode(b, ecPer));
+      const stream = interleave(dataBlocks, eccBlocks);
+      if (stream.length !== capacityOf(v).totalCodewords) return `v${v}-${ec} akış uzunluğu ${stream.length}`;
+      const di = deinterleave(Uint8Array.from(stream), v, ec);
+      if (!di.ok) return `v${v}-${ec} ${di.reason}`;
+      for (let b = 0; b < dataBlocks.length; b++) {
+        for (let i = 0; i < dataBlocks[b].length; i++) if (di.data[b][i] !== dataBlocks[b][i]) return `v${v}-${ec} blok ${b} veri`;
+        for (let i = 0; i < ecPer; i++) if (di.ecc[b][i] !== eccBlocks[b][i]) return `v${v}-${ec} blok ${b} ecc`;
+      }
+    }
+    return true;
+  });
+
+  T('Homography (bilinen 4 köşe)', () => {
+    const size = 29;
+    const dst = [[100, 50], [400, 90], [370, 380], [70, 340]];
+    const src = [[0, 0], [size, 0], [size, size], [0, size]];
+    const H = computeHomography(src, dst);
+    if (!H) return 'tekil matris';
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = applyH(H, src[i][0], src[i][1]);
+      if (Math.hypot(x - dst[i][0], y - dst[i][1]) > 1e-6) return `köşe ${i} sapması`;
+    }
+    // en küçük kareler yolu: gürültüsüz fazla nokta aynı sonucu vermeli
+    const s2 = src.concat([[10, 10], [20, 5], [5, 20]]);
+    const d2 = s2.map(p => applyH(H, p[0], p[1]));
+    const H2 = computeHomographyLS(s2, d2);
+    if (!H2) return 'LS tekil';
+    if (residualRMS(H2, s2, d2) > 1e-6) return 'LS artığı büyük';
+    return true;
+  });
+
+  T('Data bit traversal + mask (bilinen matris)', () => {
+    // Sağ alt köşedeki ilk iki modül, ilk codeword'ün ilk iki bitidir.
+    const enc = encodeToMatrix('A', 1, 'L', 0, 2);
+    const { order, size } = dataModuleOrder(1);
+    if (order[0] !== (size - 1) * size + (size - 1)) return 'ilk modül sağ alt değil';
+    if (order[1] !== (size - 1) * size + (size - 2)) return 'ikinci modül solundaki değil';
+    for (const idx of order) if (idx % size === 6) return 'timing sütunu atlanmadı';
+    const fm = buildFunctionMask(1);
+    for (const idx of order) if (fm[idx]) return 'fonksiyon modülü veri sayıldı';
+    if (order.length !== capacityOf(1).totalCodewords * 8 + capacityOf(1).remainderBits) return 'veri modülü sayısı';
+    const dec = decodeMatrix(enc.matrix, enc.size);
+    if (!dec.ok || dec.text !== 'A') return 'geri okuma başarısız';
+    return true;
+  });
+
+  T('Function pattern maskesi (v1-40)', () => {
+    for (let v = 1; v <= 40; v++) {
+      const size = sizeForVersion(v);
+      const fm = buildFunctionMask(v);
+      // dark module
+      if (!fm[(4 * v + 9) * size + 8]) return `v${v} dark module işaretsiz`;
+      // timing
+      for (let i = 0; i < size; i++) if (!fm[6 * size + i] || !fm[i * size + 6]) return `v${v} timing işaretsiz`;
+      // finder + separator köşeleri
+      if (!fm[0] || !fm[7 * size + 7] || !fm[(size - 1) * size]) return `v${v} finder işaretsiz`;
+      // alignment, finder ile çakışanlar hariç sayılmalı
+      const ap = ALIGNMENT_POS[v];
+      const expected = v === 1 ? 0 : ap.length * ap.length - 3;
+      let cnt = 0;
+      for (const ay of ap) for (const ax of ap) {
+        if ((ax === 6 && ay === 6) || (ax === 6 && ay === size - 7) || (ax === size - 7 && ay === 6)) continue;
+        cnt++;
+        if (!fm[ay * size + ax]) return `v${v} alignment (${ay},${ax}) işaretsiz`;
+      }
+      if (cnt !== expected) return `v${v} alignment sayısı ${cnt} != ${expected}`;
+      if (v >= 7) {
+        if (!fm[0 * size + (size - 11)] || !fm[(size - 11) * size + 0]) return `v${v} versiyon bilgisi işaretsiz`;
+      }
+    }
+    return true;
+  });
+
+  /* ---- Uçtan uca: matris seviyesi ---- */
+  T('Encode -> Decode (v1-L/v1-M/v3-Q/v5-H/v5-L, tüm maskeler)', () => {
+    const cases = [
+      ['HELLO', 1, 'L'], ['HELLO', 1, 'M'],
+      ['http://en.m.wikipedia.org', 3, 'Q'],
+      ['https://example.com/test', 5, 'H'],
+      ['12345678901234567890', 5, 'L']
+    ];
+    for (const [text, v, ec] of cases) {
+      for (let mask = 0; mask < 8; mask++) {
+        const enc = encodeToMatrix(text, v, ec, mask);
+        const dec = decodeMatrix(enc.matrix, enc.size);
+        if (!dec.ok) return `v${v}-${ec} mask${mask}: ${dec.reason}`;
+        if (dec.text !== text) return `v${v}-${ec} mask${mask}: metin farklı`;
+        if (dec.ecLevel !== ec || dec.mask !== mask) return `v${v}-${ec} mask${mask}: format yanlış okundu`;
+      }
+    }
+    return true;
+  });
+
+  T('Segment modları (Numeric / Alphanumeric / Byte)', () => {
+    const cases = [
+      ['12345678901234567890', 1, 'NUMERIC'],
+      ['HELLO WORLD 123', 2, 'ALPHANUMERIC'],
+      ['https://example.com/test', 4, 'BYTE'],
+      ['Türkçe: şğüöçİ', 4, 'BYTE']
+    ];
+    for (const [text, mode, label] of cases) {
+      const enc = encodeToMatrix(text, 6, 'M', 3, mode);
+      const dec = decodeMatrix(enc.matrix, enc.size);
+      if (!dec.ok || dec.text !== text) return `${label}: ${dec.reason || 'metin farklı'}`;
+      if (!dec.segments.some(s => s.mode === label)) return `${label}: segment tipi bulunamadı`;
+    }
+    return true;
+  });
+
+  T('Format okunamadığında brute-force + RS doğrulaması', () => {
+    // Her iki format kopyasını da bozup decoder'ın yine de çözmesi beklenir.
+    const enc = encodeToMatrix('http://en.m.wikipedia.org', 3, 'Q', 1);
+    const m = Uint8Array.from(enc.matrix), size = enc.size;
+    const { copy1, copy2 } = formatPositions(size);
+    for (let i = 0; i < 15; i += 2) {
+      m[copy1[i][0] * size + copy1[i][1]] ^= 1;
+      m[copy2[i][0] * size + copy2[i][1]] ^= 1;
+    }
+    const f = readFormat(m, size);
+    if (f.best) return 'format hâlâ BCH ile okunabiliyor, test anlamsız';
+    const dec = decodeMatrix(m, size);
+    if (!dec.ok) return `brute-force çözemedi: ${dec.reason}`;
+    if (dec.text !== 'http://en.m.wikipedia.org') return 'yanlış metin';
+    if (dec.ecLevel !== 'Q' || dec.mask !== 1) return `yanlış ec/mask: ${dec.ecLevel}/${dec.mask}`;
+    return true;
+  });
+
+  /* ---- Uçtan uca: görüntü seviyesi ---- */
+  const imgCases = [
+    ['HELLO', 1, 'L'], ['HELLO', 1, 'M'],
+    ['http://en.m.wikipedia.org', 3, 'Q'],
+    ['https://example.com/test', 5, 'H'],
+    ['12345678901234567890', 5, 'L']
+  ];
+
+  T('Görüntü: temiz QR', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const r = decodeImage(_render(enc.matrix, enc.size, 8, 4), { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec}: ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  T('Görüntü: perspektif dönüşümü', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const base = _render(enc.matrix, enc.size, 10, 4);
+      const out = 520;
+      const img = _warp(base, [[70, 40], [470, 95], [430, 470], [55, 415]], out, out);
+      const r = decodeImage(img, { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec}: ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  T('Görüntü: bulanıklık (motion/defocus)', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const r = decodeImage(_blur(_render(enc.matrix, enc.size, 8, 4), 2), { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec}: ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  T('Görüntü: kısmi threshold bozulması (gölge)', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const r = decodeImage(_shadow(_render(enc.matrix, enc.size, 8, 4), 0.7), { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec}: ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  T('Görüntü: modül seviyesinde bit bozulması', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const [ecPer, groups] = EC_BLOCKS[v][ec];
+      const nb = groups.reduce((a, g) => a + g[0], 0);
+      const budget = Math.max(1, Math.floor((ecPer >> 1) * nb * 0.45));
+      const m = Uint8Array.from(enc.matrix);
+      const fm = buildFunctionMask(v);
+      const free = [];
+      for (let i = 0; i < enc.size * enc.size; i++) if (!fm[i]) free.push(i);
+      for (let i = 0; i < budget; i++) m[free[(rng() * free.length) | 0]] ^= 1;
+      const r = decodeImage(_render(m, enc.size, 8, 4), { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec} (${budget} modül): ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  T('Görüntü: perspektif + bulanıklık + gölge birlikte', () => {
+    for (const [text, v, ec] of imgCases) {
+      const enc = encodeToMatrix(text, v, ec, (rng() * 8) | 0);
+      const base = _render(enc.matrix, enc.size, 10, 4);
+      const img = _shadow(_blur(_warp(base, [[70, 40], [470, 95], [430, 470], [55, 415]], 520, 520), 1), 0.5);
+      const r = decodeImage(img, { timeBudgetMs: 0 });
+      if (!r.ok || r.text !== text) return `v${v}-${ec}: ${r.reason || 'metin farklı'}`;
+    }
+    return true;
+  });
+
+  log(`[SELF TEST] ---- ${pass} PASS / ${fail} FAIL ----`);
+  return { pass, fail, results, ok: fail === 0 };
+}
+
+/* ============================================================
+   BÖLÜM 6 — UYGULAMA / UI KATMANI
+   ============================================================ */
+
+const logArea = document.getElementById('debug-log');
+const statusBar = document.getElementById('status-bar');
+const video = document.getElementById('video');
+const hiddenCanvas = document.getElementById('hidden-canvas');
+const debugCanvas = document.getElementById('debug-canvas');
+const hCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+const dCtx = debugCanvas.getContext('2d');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+const btnClear = document.getElementById('btn-clear');
+const btnRetest = document.getElementById('btn-retest');
+const fileInput = document.getElementById('file-input');
+const chkVerbose = document.getElementById('chk-verbose');
+const chkNative = document.getElementById('chk-native');
+const resultBox = document.getElementById('result-box');
+
+let logLines = 0;
+function dlog(msg) {
+  const t = new Date().toLocaleTimeString('tr-TR');
+  logArea.value += `[${t}] ${msg}\n`;
+  if (++logLines > 4000) {                 // sınırsız büyümeyi engelle
+    const keep = logArea.value.split('\n').slice(-2000);
+    logArea.value = keep.join('\n');
+    logLines = keep.length;
+  }
+  logArea.scrollTop = logArea.scrollHeight;
+}
+function clearLog() { logArea.value = ''; logLines = 0; dlog('Log temizlendi.'); }
+function setStatus(m) { statusBar.textContent = 'Durum: ' + m; }
+
+/* ---- Durum ---- */
+let stream = null, scanning = false, raf = null, cooldown = false, frameCount = 0;
+let selfTestOk = false;
+let nativeDetector = null;
+let lastFrameStats = null;
+
+/* Aynı hatayı her karede basmayı engelleyen kapı */
+let lastFailKey = '', lastFailAt = 0, suppressed = 0;
+function logPipelineFailure(res) {
+  const key = res.stage + '|' + res.reason;
+  const now = Date.now();
+  if (key === lastFailKey && now - lastFailAt < 3000) { suppressed++; return; }
+  if (suppressed > 0) dlog(`   (aynı durum ${suppressed} kare daha tekrarlandı)`);
+  suppressed = 0; lastFailKey = key; lastFailAt = now;
+  dlog(`[PIPELINE] durdu -> ${res.stage}: ${res.reason}`);
+  if (chkVerbose.checked) for (const s of res.stages) dlog(`   [${s.stage}] ${s.ok ? 'OK' : 'FAIL'} ${s.reason}`);
+}
+function logPipelineSuccess(res) {
+  lastFailKey = ''; suppressed = 0;
+  dlog('--- PIPELINE ---');
+  for (const s of res.stages) dlog(`  [${s.stage}] ${s.ok ? 'OK' : 'FAIL'} ${s.reason}`);
+}
+
+/* ---- Debug canvas ---- */
+function renderDebug(debug, ok) {
+  const { w, h, bin } = debug;
+  if (!w || !h || !bin) return;
+  debugCanvas.width = w; debugCanvas.height = h;
+  const img = dCtx.createImageData(w, h);
+  for (let i = 0; i < bin.length; i++) {
+    const c = bin[i] ? 0 : 255, p = i * 4;
+    img.data[p] = img.data[p + 1] = img.data[p + 2] = c;
+    img.data[p + 3] = 255;
+  }
+  dCtx.putImageData(img, 0, 0);
+
+  // kırmızı: tüm finder adayları
+  dCtx.fillStyle = '#ff0000';
+  for (const c of debug.finders || []) dCtx.fillRect(c.x - 2.5, c.y - 2.5, 5, 5);
+
+  // yeşil: seçilen finder üçgeni
+  if (debug.triangle) {
+    const { tl, tr, bl } = debug.triangle;
+    dCtx.strokeStyle = '#00c000'; dCtx.lineWidth = 2;
+    dCtx.beginPath();
+    dCtx.moveTo(tr.x, tr.y); dCtx.lineTo(tl.x, tl.y); dCtx.lineTo(bl.x, bl.y);
+    dCtx.stroke();
+    dCtx.fillStyle = '#00c000';
+    dCtx.font = 'bold 12px monospace';
+    dCtx.fillText('TL', tl.x + 6, tl.y - 6);
+    dCtx.fillText('TR', tr.x + 6, tr.y - 6);
+    dCtx.fillText('BL', bl.x + 6, bl.y - 6);
+  }
+
+  // mavi: tahmin edilen QR köşeleri
+  if (debug.corners && debug.corners.length === 4 && isFinite(debug.corners[0][0])) {
+    dCtx.strokeStyle = '#0060ff'; dCtx.lineWidth = 2;
+    dCtx.beginPath();
+    dCtx.moveTo(debug.corners[0][0], debug.corners[0][1]);
+    for (let i = 1; i < 4; i++) dCtx.lineTo(debug.corners[i][0], debug.corners[i][1]);
+    dCtx.closePath(); dCtx.stroke();
+  }
+
+  // sarı: düşük güvenli modüller
+  if (debug.lowConfidence && debug.lowConfidence.length && debug.homography && debug.size) {
+    dCtx.fillStyle = 'rgba(255,220,0,0.75)';
+    const size = debug.size;
+    for (const idx of debug.lowConfidence) {
+      const r = (idx / size) | 0, c = idx % size;
+      const [x, y] = applyH(debug.homography, c + 0.5, r + 0.5);
+      if (isFinite(x)) dCtx.fillRect(x - 2, y - 2, 4, 4);
+    }
+  }
+}
+
+/* ---- Sonuç ---- */
+function showResult(res, source) {
+  resultBox.textContent = res.text;
+  setStatus('Karekod çözüldü.');
+  dlog('=== TARAMA BAŞARILI (' + source + ') ===');
+  if (res.version) {
+    dlog(`  Versiyon ${res.version} (${res.size}x${res.size}), EC ${res.ecLevel}, mask ${res.mask}` +
+         (res.formatFromBCH ? ' [format BCH ile okundu]' : ' [format brute-force + RS ile bulundu]'));
+    dlog(`  RS: toplam ${res.totalErrors} codeword hatası düzeltildi`);
+  }
+  dlog('  İÇERİK: ' + res.text);
+}
+
+/* ---- Kare işleme ---- */
+let strategyOffset = 0;
+function processImageData(imageData, source, budget) {
+  const t0 = performance.now();
+  const res = decodeImage(imageData, { timeBudgetMs: budget, strategyOffset });
+  /* Başarılı olan binarization stratejisini hatırla ve bir sonraki karede
+     ilk sırada dene; başarısızlıkta sırayı döndür ki zamanla hepsi denensin. */
+  if (res.ok && res.strategyIndex !== undefined) strategyOffset = res.strategyIndex;
+  else strategyOffset = (strategyOffset + 1) & 3;
+  const ms = (performance.now() - t0).toFixed(1);
+  renderDebug(res.debug, res.ok);
+  if (res.ok) { logPipelineSuccess(res); dlog(`  (süre ${ms} ms)`); showResult(res, source); }
+  else { logPipelineFailure(res); }
+  return res;
+}
+
+async function tryNative(canvas) {
+  if (!nativeDetector || !chkNative.checked) return null;
+  try {
+    const codes = await nativeDetector.detect(canvas);
+    if (codes && codes.length && codes[0].rawValue) return codes[0].rawValue;
+  } catch (e) { /* sessiz: özel decoder devreye girer */ }
+  return null;
+}
+
+async function tick() {
+  if (!scanning) return;
+  if (!cooldown && video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (vw && vh) {
+      hiddenCanvas.width = vw; hiddenCanvas.height = vh;
+      hCtx.drawImage(video, 0, 0, vw, vh);
+      frameCount++;
+      if (frameCount % 2 === 0) {
+        // 1) Yerleşik BarcodeDetector (varsa) — hızlı yol
+        const nativeText = await tryNative(hiddenCanvas);
+        if (nativeText) {
+          // Özel decoder'ı yine de çalıştırıp debug görselini üret
+          const idata = hCtx.getImageData(0, 0, vw, vh);
+          const own = decodeImage(idata, { timeBudgetMs: 130, strategyOffset });
+          renderDebug(own.debug, own.ok);
+          if (own.ok) { logPipelineSuccess(own); showResult(own, 'özel decoder'); }
+          else { showResult({ text: nativeText }, 'yerleşik BarcodeDetector'); }
+          onFound();
+          return;
+        }
+        // 2) Özel decoder
+        const idata = hCtx.getImageData(0, 0, vw, vh);
+        const res = processImageData(idata, 'özel decoder', 130);
+        if (res.ok) { onFound(); return; }
+      }
+    }
+  }
+  raf = requestAnimationFrame(() => { tick(); });
+}
+
+function onFound() {
+  cooldown = true;
+  setTimeout(() => {
+    cooldown = false;
+    if (scanning) { setStatus('Yeniden taramaya hazır.'); raf = requestAnimationFrame(() => tick()); }
+  }, 2500);
+}
+
+/* ---- Kamera ---- */
+async function startCamera() {
+  if (scanning) return;
+  setStatus('Kamera başlatılıyor...');
+  btnStart.disabled = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+    scanning = true;
+    btnStop.disabled = false;
+    setStatus('Tarama devam ediyor — kamerayı koda hizalayın.');
+    dlog('Kamera açıldı: ' + video.videoWidth + 'x' + video.videoHeight);
+    raf = requestAnimationFrame(() => tick());
+  } catch (e) {
+    btnStart.disabled = false;
+    setStatus('Kamera hatası: ' + e.message);
+    dlog('Kamera hatası: ' + e.message);
+  }
+}
+function stopCamera() {
+  scanning = false;
+  if (raf) cancelAnimationFrame(raf);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; video.srcObject = null;
+  btnStart.disabled = false; btnStop.disabled = true;
+  setStatus('Kamera durduruldu.');
+  dlog('Kamera durduruldu.');
+}
+
+/* ---- Dosyadan görüntü ---- */
+function handleFile(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const im = new Image();
+  im.onload = () => {
+    hiddenCanvas.width = im.width; hiddenCanvas.height = im.height;
+    hCtx.drawImage(im, 0, 0);
+    URL.revokeObjectURL(url);
+    dlog(`--- GÖRÜNTÜ ÇÖZÜMLENİYOR: ${file.name} (${im.width}x${im.height}) ---`);
+    setStatus('Görüntü çözümleniyor...');
+    const idata = hCtx.getImageData(0, 0, im.width, im.height);
+    const res = processImageData(idata, 'dosya', 0);   // dosyada zaman sınırı yok
+    if (!res.ok) { setStatus('Görüntü çözülemedi: ' + res.stage); resultBox.textContent = '(çözülemedi)'; }
+  };
+  im.onerror = () => dlog('Görüntü yüklenemedi.');
+  im.src = url;
+}
+
+/* ---- Başlangıç ---- */
+btnStart.addEventListener('click', startCamera);
+btnStop.addEventListener('click', stopCamera);
+btnClear.addEventListener('click', clearLog);
+btnRetest.addEventListener('click', () => bootSelfTest());
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+function bootSelfTest() {
+  btnStart.disabled = true; btnRetest.disabled = true;
+  setStatus('Self-test çalışıyor...');
+  dlog('===== SELF TEST BAŞLIYOR =====');
+  setTimeout(() => {
+    const t0 = performance.now();
+    const r = runSelfTests(dlog);
+    dlog(`===== SELF TEST BİTTİ (${(performance.now() - t0).toFixed(0)} ms) =====`);
+    selfTestOk = r.ok;
+    btnRetest.disabled = false;
+    if (r.ok) {
+      btnStart.disabled = false;
+      setStatus('Hazır — self-test geçti, decoder etkin.');
     } else {
-      setStatus('✗ ' + (res.message || 'Sorgu başarısız'), 'err');
+      btnStart.disabled = true;
+      setStatus('SELF TEST BAŞARISIZ — decoder etkinleştirilmedi.');
+      dlog('Testler geçmediği için kamera decoder\'ı devre dışı bırakıldı.');
     }
-  })
-  .catch(() => {
-    setStatus('Sunucuya ulaşılamadı; okunan: ' +
-      (data.length > 60 ? data.substring(0,60) + '…' : data), 'err');
-  });
+  }, 50);
 }
 
-function renderHistory() {
-  histList.innerHTML = '';
-  histWrap.style.display = results.length ? 'flex' : 'none';
-  btnClear.disabled = !results.length;
-  results.forEach((r, i) => {
-    const el = document.createElement('div');
-    el.className = 'hist-item';
-    el.innerHTML = `<div class="ht">#${i+1} · ${r.time}</div><div class="hv">${escHtml(r.text)}</div>`;
-    histList.appendChild(el);
-  });
-}
+(function init() {
+  btnStop.disabled = true;
+  dlog('QR Decoder v4 — vanilla JavaScript, harici kütüphane yok.');
+  if ('BarcodeDetector' in window) {
+    try {
+      nativeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+      dlog('Yerleşik BarcodeDetector mevcut — hızlı yol etkin (özel decoder yedek olarak çalışır).');
+    } catch (e) { dlog('BarcodeDetector oluşturulamadı: ' + e.message); }
+  } else {
+    dlog('Yerleşik BarcodeDetector yok — yalnızca özel decoder kullanılacak.');
+    chkNative.disabled = true; chkNative.checked = false;
+  }
+  bootSelfTest();
+})();
 
-function clearHistory() {
-  results = [];
-  renderHistory();
-  setStatus('Tarihçe temizlendi');
-}
+})();
 
-const escHtml = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 </script>
 </body>
 </html>
