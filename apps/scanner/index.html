@@ -111,6 +111,27 @@
   button.primary { background: var(--primary); color: var(--bg); border-color: var(--primary); }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
 
+  /* Dosya seçici düğme gibi görünmeli: <input type=file> biçimlendirilemez,
+     bu yüzden görünür olan <label>'dır ve girdi gizlidir. */
+  .file-btn {
+    flex: 1; padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.95rem; font-weight: 600;
+    text-align: center; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .file-btn:active { transform: scale(0.97); }
+
+  /* Karekod taramasının NE KANITLADIĞINI söyleyen not. */
+  .hint {
+    width: 100%; max-width: 340px;
+    margin: 0; font-size: 0.75rem; line-height: 1.5;
+    color: var(--muted);
+  }
+
   .history { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 8px; }
   .history h2 { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
   .hist-item {
@@ -150,8 +171,22 @@
 
 <div class="btn-row">
   <button class="primary" id="btn-cam" onclick="toggleCamera()">Kamerayı Aç</button>
+  <label class="file-btn" for="pdf-input">Dosyayı Doğrula</label>
+  <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden
+         onchange="verifyFile(this.files[0]); this.value='';">
   <button id="btn-clear" onclick="clearHistory()" disabled>Temizle</button>
 </div>
+
+<!--
+  KAREKOD BİR KANIT DEĞİLDİR: üzerinde durduğu belgeyle arasında hiçbir bağ
+  yoktur. Gerçek bir belgenin karekodunu kesip sahtesine yapıştıran biri,
+  yalnız kimliğe bakan bir taramadan "doğrulandı" alır. Kesin bağ ancak
+  dosyanın kendisinden hesaplanan özetle kurulur — bu yüzden bu düğme var.
+-->
+<p class="hint" id="binding-hint">
+  Kamerayla tarama yalnız <b>karekoddaki kimliği</b> sorgular; elinizdeki
+  dosyanın o belge olduğunu kanıtlamaz. Kesin sonuç için dosyayı yükleyin.
+</p>
 
 <div class="history" id="history" style="display:none">
   <h2>Tarihçe</h2>
@@ -950,20 +985,59 @@ function toQuery(text) {
   return { docNo: raw.slice(0, 128) };
 }
 
+/**
+ * Dosyanın kendisini gönderir — özet SUNUCUDA hesaplanır.
+ *
+ * Karekod nakli saldırısını kapatan tek yol budur: kimliğe değil, elinizdeki
+ * baytlara bakılır.
+ */
+function verifyFile(file) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    setStatus('Dosya çok büyük (en fazla 8 MB).', 'err');
+    return;
+  }
+  setStatus('Dosya doğrulanıyor…', 'busy');
+
+  const reader = new FileReader();
+  reader.onerror = () => setStatus('Dosya okunamadı.', 'err');
+  reader.onload = () => {
+    const b64 = String(reader.result).split(',')[1] || '';
+    post({ pdf: b64 });
+  };
+  reader.readAsDataURL(file);
+}
+
 function sendToServer(data) {
+  post({ ...toQuery(data), ts: Date.now() });
+}
+
+function post(payload) {
   fetch('/api/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...toQuery(data), ts: Date.now() })
+    body: JSON.stringify(payload)
   })
   .then(r => r.json())
   .then(res => {
+    // Karekodun söylediği ile dosyanın kendisi uyuşmuyorsa bu, en ciddi
+    // sonuçtur ve diğer durumların önüne geçer.
+    if (res.binding === 'mismatch') {
+      setStatus('✗ Karekod bu belgeye ait DEĞİL: ' + (res.message || ''), 'err');
+      return;
+    }
     // DÖRT CEVAP, DÖRT ANLAM. "Bilinmiyor" ile "geçersiz" aynı şey değildir
     // ve kullanıcıya aynı şeymiş gibi gösterilmemelidir.
     if (res.status === 'verified') {
       const who = res.signer ? ' · ' + res.signer : '';
       const when = res.signedAt ? ' · ' + new Date(res.signedAt).toLocaleString('tr-TR') : '';
-      setStatus('✓ Kayıtlı ve geçerli' + who + when, 'ok');
+      // İDDİA, KANITIN ÖTESİNE GEÇMEMELİ. Dosya görülmediyse bu cevap
+      // elinizdeki belge hakkında değil, o kimliğe sahip belge hakkındadır.
+      const kesin = res.binding === 'computed';
+      setStatus((kesin ? '✓ Bu dosya kayıtlı ve geçerli' : '✓ Bu KİMLİK kayıtlı ve geçerli')
+        + who + when
+        + (kesin ? '' : ' — elinizdeki dosyayı doğrulamak için yükleyin'),
+        kesin ? 'ok' : 'busy');
     } else if (res.status === 'invalid') {
       setStatus('✗ Kayıtlı ama imza GEÇERSİZDİ: ' + (res.message || ''), 'err');
     } else if (res.status === 'indeterminate') {
