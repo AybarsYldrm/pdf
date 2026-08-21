@@ -10,7 +10,7 @@ Sistem şu anda en yüksek kapasiteli QR standartlarından biri olan Versiyon 40
 
 Aşağıdaki görselde projenin qr.png dosyası üzerindeki hata düzeltme (EC H, Mask 2) ve çözümleme başarısı (1852 karaktere kadar) görülmektedir[cite: 1]:
 
-![Tarama Sonucu](result.png)
+![Tarama Sonucu](/apps/scanner/result.png)
 
 ## Temel Özellikler
 
