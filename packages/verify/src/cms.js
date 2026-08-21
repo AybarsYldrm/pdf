@@ -210,13 +210,28 @@ function encodeLength(len) {
 function verifySignerInfo(signerInfo, signerCertDer, contentDigest,
                           expectedContentType = OIDS.data) {
   const result = {
+    signedAttrsPresent: !!signerInfo.signedAttrs,
     signatureValid: false,
     messageDigestMatches: null,
     contentTypeValid: null,
     signingCertificateValid: null,
+    signingCertificatePresent: false,
     signingTime: null,
     errors: []
   };
+
+  // 0. signedAttrs'ın KENDİSİ zorunludur.
+  //
+  // Yoksa aşağıdaki üç kontrol de sessizce atlanır ve imza doğrudan belge
+  // özetinin üzerine düşer. O noktada imza artık ne bir sertifikaya, ne bir
+  // içerik türüne, ne de bir amaca bağlıdır: aynı anahtarla başka bir
+  // protokolde üretilmiş ham bir imza (challenge-response, ham özet imzalayan
+  // bir HSM ucu) doğrudan PDF'e taşınabilir. ISO 32000 ve ETSI EN 319 142-1
+  // imzalı öznitelikleri zorunlu kılar.
+  if (!signerInfo.signedAttrs) {
+    result.errors.push('imzalı öznitelikler (signedAttrs) yok — ' +
+      'imza belgeye değil yalnız ham özete bağlı (RFC 5652 §5.3, ETSI EN 319 142-1)');
+  }
 
   // 1. message-digest özniteliği içerik özetiyle eşleşmeli
   if (signerInfo.signedAttrs) {
@@ -252,6 +267,7 @@ function verifySignerInfo(signerInfo, signerCertDer, contentDigest,
     const scValues = signerInfo.signedAttrs[OIDS.signingCertificateV2] ||
                      signerInfo.signedAttrs[OIDS.signingCertificate];
     if (scValues && scValues.length) {
+      result.signingCertificatePresent = true;
       result.signingCertificateValid = verifySigningCertificate(scValues[0], signerCertDer);
       if (!result.signingCertificateValid) {
         result.errors.push('signing-certificate-v2 özeti, imzalayan sertifikayla eşleşmiyor');

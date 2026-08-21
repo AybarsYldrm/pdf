@@ -24,6 +24,7 @@ const {
 } = require('@fitfak/pades/src/utils/pdf_parser');
 const ext = require('@fitfak/pades/src/cades/x509_ext');
 const cms = require('./src/cms');
+const { validatePath } = require('./src/path');
 const { parseCrl, checkCrl } = require('@fitfak/pades/src/cades/crl');
 
 class VerifyError extends Error {
@@ -33,6 +34,9 @@ class VerifyError extends Error {
     this.code = code;
   }
 }
+
+/** id-kp-timeStamping — RFC 3161 §2.3, TSA sertifikasında ZORUNLU. */
+const OID_TIME_STAMPING = '1.3.6.1.5.5.7.3.8';
 
 /** ETSI TS 119 102-1 ana göstergeleri */
 const INDICATION = {
@@ -230,6 +234,7 @@ async function verifyOneSignature(sig, ctx) {
   // ── 4. CMS doğrulaması ──
   const cmsResult = cms.verifySignerInfo(signerInfo, signerCert, contentDigest);
   entry.cms = {
+    signedAttrsPresent: cmsResult.signedAttrsPresent,
     signatureValid: cmsResult.signatureValid,
     messageDigestMatches: cmsResult.messageDigestMatches,
     contentTypeValid: cmsResult.contentTypeValid,
@@ -249,12 +254,49 @@ async function verifyOneSignature(sig, ctx) {
     return entry;
   }
 
+  // ── 4b. ZORUNLU imzalı öznitelikler karar verir ──
+  //
+  // Bu blok olmadan yukarıdaki hatalar yalnız `entry.errors`'a yazılıyor,
+  // göstergeyi hiç etkilemiyordu: content-type'ı yanlış, imzalayan sertifikaya
+  // hiç bağlanmamış bir CMS TOTAL-PASSED dönüyordu. Rapordaki hata listesini
+  // kimse okumaz; kullanıcı yeşil tiki görür.
+  if (!cmsResult.signedAttrsPresent) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (cmsResult.contentTypeValid === false) {
+    // RFC 5652 §11.1: content-type ZORUNLUDUR ve eContentType ile eşleşmelidir.
+    // Eşleşmezse imza, imzalayanın onayladığından BAŞKA bir bağlama aittir —
+    // bir zaman damgası jetonunun belge imzası yerine geçirilmesi gibi.
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (cmsResult.signingCertificateValid === false && cmsResult.signingCertificatePresent) {
+    // Öznitelik VAR ama başka bir sertifikayı gösteriyor: aktif bir sertifika
+    // değiştirme girişimi. Bu kesin bir başarısızlıktır.
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (!cmsResult.signingCertificatePresent) {
+    // Öznitelik hiç yok. PAdES bunu ZORUNLU kılar; eski Adobe profillerinde
+    // (adbe.pkcs7.*) isteğe bağlıydı. İkisini aynı kefeye koymamak gerekir:
+    // biri standart ihlali, diğeri eksik kanıt.
+    const isPades = typeof sig.subFilter === 'string' && sig.subFilter.startsWith('ETSI.');
+    entry.indication = isPades ? INDICATION.FAILED : INDICATION.INDETERMINATE;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    if (isPades) return entry;
+  }
+
   // ── 5. Zincir ──
-  const chain = ext.buildChain(signerCert, dedupe([...pool, ...ctx.trustAnchors]));
+  const chain = ext.buildChain(signerCert, dedupe([...pool, ...ctx.trustAnchors]),
+    { anchors: ctx.trustAnchors });
   entry.chain = chain.path.map(describeCert);
 
   const anchor = chain.path[chain.path.length - 1];
-  const trusted = ctx.trustAnchors.some((ta) => ta.equals(anchor)) || isSelfSignedIn(anchor, ctx.trustAnchors);
+  const trusted = isTrustAnchor(anchor, ctx.trustAnchors);
   entry.chain.trusted = trusted;
 
   if (!chain.complete) {
@@ -275,6 +317,20 @@ async function verifyOneSignature(sig, ctx) {
       entry.errors.push(`Zincir imzası geçersiz: ${describeCert(chain.path[i]).cn}`);
       return entry;
     }
+  }
+
+  // ── 5b. RFC 5280 §6.1 yol kısıtları ──
+  // İmzaların doğrulanması yolu GEÇERLİ yapmaz: imzalayanın imzalamaya
+  // YETKİLİ olup olmadığı ayrı bir sorudur. Bu blok olmadan, güvenilen bir
+  // CA'dan alınmış sıradan bir son varlık sertifikası kendine "Genel Müdür"
+  // sertifikası üretip belge imzalayabiliyordu.
+  const pathCheck = validatePath(chain.path);
+  entry.warnings.push(...pathCheck.warnings);
+  if (!pathCheck.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(...pathCheck.errors);
+    return entry;
   }
 
   // ── 6. Zaman damgaları ──
@@ -342,9 +398,18 @@ async function verifyOneSignature(sig, ctx) {
   // ── 9. Seviye ──
   entry.achievedLevel = determineLevel(entry, sig, ctx);
 
-  if (entry.indication === INDICATION.INDETERMINATE && !entry.subIndication) {
-    entry.indication = INDICATION.PASSED;
-  } else if (!entry.errors.length && entry.subIndication === null) {
+  // ── 10. Nihai gösterge ──
+  //
+  // TEK YÜKSELTME KURALI: hiç hata yoksa ve bir alt gösterge konmadıysa imza
+  // geçer. Eski kodda ilk dal `entry.errors`'a hiç bakmıyordu; bir alt gösterge
+  // koymayan her hata sessizce yutuluyor ve imza TOTAL-PASSED oluyordu. Bir
+  // doğrulayıcıda "bilinmeyen bir sorun vardı ama geçti" diye bir durum olamaz.
+  if (entry.errors.length) {
+    if (entry.indication === INDICATION.PASSED) {
+      entry.indication = INDICATION.INDETERMINATE;
+    }
+    if (!entry.subIndication) entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+  } else if (entry.indication === INDICATION.INDETERMINATE && !entry.subIndication) {
     entry.indication = INDICATION.PASSED;
   }
 
@@ -462,10 +527,28 @@ function verifyDocTimeStamp(sig, entry, ctx) {
   // TSA zinciri
   const pool = [...parsed.certificates];
   if (ctx.dss) pool.push(...ctx.dss.certs);
-  const chain = ext.buildChain(tsaCert, dedupe([...pool, ...ctx.trustAnchors]));
+  const chain = ext.buildChain(tsaCert, dedupe([...pool, ...ctx.trustAnchors]),
+    { anchors: ctx.trustAnchors });
   entry.chain = chain.path.map(describeCert);
   const anchor = chain.path[chain.path.length - 1];
-  entry.chain.trusted = ctx.trustAnchors.some((ta) => ta.equals(anchor));
+  entry.chain.trusted = isTrustAnchor(anchor, ctx.trustAnchors);
+
+  for (let i = 0; i < chain.path.length - 1; i++) {
+    if (verifyCertSignature(chain.path[i], chain.path[i + 1])) continue;
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(`TSA zincir imzası geçersiz: ${describeCert(chain.path[i]).cn}`);
+    return entry;
+  }
+
+  const tsaPath = validatePath(chain.path, { requiredEku: [OID_TIME_STAMPING] });
+  entry.warnings.push(...tsaPath.warnings);
+  if (!tsaPath.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(...tsaPath.errors);
+    return entry;
+  }
 
   entry.achievedLevel = 'doc-timestamp';
   entry.indication = INDICATION.PASSED;
@@ -835,14 +918,39 @@ function verifyCertSignature(childDer, issuerDer) {
   }
 }
 
-function isSelfSignedIn(certDer, anchors) {
+/**
+ * Bu sertifika güven deposundaki bir çıpanın TA KENDİSİ mi?
+ *
+ * Burada tek geçerli ölçüt kimliktir: aynı DER, ya da (kodlama farklarına
+ * karşı) aynı açık anahtar + aynı Subject DN. Ad benzerliği ölçüt DEĞİLDİR.
+ *
+ * ESKİ DAVRANIŞ BİR ATLATMAYDI. Önceki `isSelfSignedIn()` adı yanıltıcıydı:
+ * hiçbir kendinden-imza kontrolü yapmıyor, yalnız Subject DN'leri
+ * karşılaştırıyordu. Saldırganın ürettiği, kurbanın kökü ile aynı DN'ye
+ * sahip ama tamamen farklı anahtarlı bir kök "güvenilir" sayılıyor ve
+ * belge TOTAL-PASSED dönüyordu. DN bir kimlik değil, bir etikettir; kimseyi
+ * kimseden ayırt etmez ve saldırgan tarafından serbestçe seçilir.
+ */
+function isTrustAnchor(certDer, anchors) {
   if (!certDer) return false;
+  if (anchors.some((ta) => ta.equals(certDer))) return true;
+
+  // Aynı sertifikanın farklı ama denk DER kodlaması: anahtar + isim eşleşmeli.
+  const spki = safe(() => publicKeyDer(certDer));
   const subject = safe(() => ext.getSubjectDer(certDer));
-  if (!subject) return false;
+  if (!spki || !subject) return false;
+
   return anchors.some((a) => {
-    const s = safe(() => ext.getSubjectDer(a));
-    return s && s.equals(subject);
+    const s = safe(() => publicKeyDer(a));
+    const n = safe(() => ext.getSubjectDer(a));
+    return s && n && s.equals(spki) && n.equals(subject);
   });
+}
+
+/** Sertifikanın SubjectPublicKeyInfo DER kodlaması. */
+function publicKeyDer(certDer) {
+  return new crypto.X509Certificate(certDer)
+    .publicKey.export({ type: 'spki', format: 'der' });
 }
 
 /** ETSI seviye tespiti. */
