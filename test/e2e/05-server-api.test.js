@@ -494,6 +494,52 @@ test('İmzalı belge düzenlenince imza geçerli kalır (uçtan uca)', async () 
     'değişiklik gizlenmemeli');
 });
 
+test('dışa açık adres + belirteçsiz kurulum: hassas uçlar SERVİS DIŞI', async () => {
+  const policy = require('../../apps/server/src/policy');
+  const oncekiTokens = policy.AUTH.tokens.slice();
+  const oncekiHost = policy.AUTH.boundHost;
+
+  try {
+    // Belirteç yok + dışa açık adres: bu, "yanlışlıkla açık kalan dağıtım".
+    policy.AUTH.tokens.length = 0;
+    policy.setBinding('0.0.0.0');
+    assert.strictEqual(policy.isExposed(), true);
+
+    const fakeReq = { headers: {} };
+    for (const rota of ['POST /api/sign/prepare', 'POST /api/sign/pfx',
+                        'POST /api/pfx/identities', 'POST /api/ltv/extend']) {
+      const karar = policy.authorize(fakeReq, rota);
+      assert.strictEqual(karar.allowed, false, `${rota} açık kalmış`);
+      assert.strictEqual(karar.code, 'ERR_AUTH_NOT_CONFIGURED');
+      assert.strictEqual(karar.status, 503);
+    }
+
+    // Zararsız uçlar etkilenmez: sunucu tamamen kullanılmaz hâle gelmemeli.
+    assert.strictEqual(policy.authorize(fakeReq, 'POST /api/render').allowed, true);
+    assert.strictEqual(policy.authorize(fakeReq, 'GET /api/health').allowed, true);
+
+    // Yerel arayüzde aynı kurulum çalışmaya devam eder (geliştirme akışı).
+    policy.setBinding('127.0.0.1');
+    assert.strictEqual(policy.authorize(fakeReq, 'POST /api/sign/prepare').allowed, true);
+
+    // Belirteç tanımlanınca dışa açık adres de kullanılabilir.
+    policy.setBinding('0.0.0.0');
+    policy.AUTH.tokens.push('cok-gizli-belirtec');
+    const reddedilen = policy.authorize(fakeReq, 'POST /api/sign/prepare');
+    assert.strictEqual(reddedilen.allowed, false);
+    assert.strictEqual(reddedilen.status, 401, 'artık kimlik doğrulama isteniyor');
+
+    const kabul = policy.authorize(
+      { headers: { authorization: 'Bearer cok-gizli-belirtec' } },
+      'POST /api/sign/prepare');
+    assert.strictEqual(kabul.allowed, true);
+  } finally {
+    policy.AUTH.tokens.length = 0;
+    policy.AUTH.tokens.push(...oncekiTokens);
+    policy.setBinding(oncekiHost);
+  }
+});
+
 test('sunucu tarafı PFX VARSAYILAN OLARAK kapalıdır', async () => {
   const mod = require('../../apps/server/server');
   const saved = mod.CONFIG.allowServerSidePfx;

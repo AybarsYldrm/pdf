@@ -25,6 +25,7 @@ const {
 const ext = require('@fitfak/pades/src/cades/x509_ext');
 const cms = require('./src/cms');
 const { validatePath } = require('./src/path');
+const { assessAlgorithms } = require('./src/algorithms');
 const {
   analyzeIncrementalChanges, validateByteRange, readDocMdp
 } = require('./src/revision');
@@ -137,6 +138,7 @@ async function verifyPdf(pdfBuffer, opts = {}) {
         pdfBuffer, dss, trustAnchors, validationTime, useEmbedded,
         allowNetwork: !!opts.allowNetwork, revisions,
         allowPrivateNetwork: opts.allowPrivateNetwork === true,
+        algorithmPolicy: opts.algorithmPolicy,
         allowHosts: opts.allowHosts,
         denyHosts: opts.denyHosts,
         // En geniş kapsama göre yapılan karşılaştırma her imza için aynıdır;
@@ -363,6 +365,29 @@ async function verifyOneSignature(sig, ctx) {
     entry.indication = INDICATION.FAILED;
     entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
     entry.errors.push(...pathCheck.errors);
+    return entry;
+  }
+
+  // ── 5c. Algoritma politikası ──
+  //
+  // İmzanın MATEMATİKSEL olarak doğrulanması güvenilir olduğu anlamına
+  // gelmez. SHA-1 çakışma direncini kaybetti; 1024 bitlik RSA bugün
+  // kırılabilir sayılıyor. Bu blok olmadan böyle bir imza sessizce
+  // TOTAL-PASSED dönüyordu.
+  const algo = assessAlgorithms({
+    signerCert,
+    digestAlgorithm: hashName,
+    signatureAlgorithm: signerInfo.signatureAlgorithm,
+    chain: chain.path
+  }, ctx.algorithmPolicy);
+  entry.algorithms = algo.details;
+  entry.warnings.push(...algo.warnings);
+  if (!algo.ok) {
+    // ETSI TS 119 102-1: kriptografik kısıt ihlali, POE yoksa INDETERMINATE
+    // verir. İmza matematiksel olarak doğrulandı; güvenilmez olan algoritma.
+    entry.indication = INDICATION.INDETERMINATE;
+    entry.subIndication = 'CRYPTO_CONSTRAINTS_FAILURE_NO_POE';
+    entry.errors.push(...algo.errors);
     return entry;
   }
 

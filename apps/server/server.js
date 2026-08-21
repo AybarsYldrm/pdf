@@ -1394,6 +1394,10 @@ function start() {
   CONFIG.host = process.env.HOST || CONFIG.host;
   CONFIG.tsaUrl = process.env.TSA_URL || CONFIG.tsaUrl;
 
+  // Yetki kararı bağlanılan adrese bakar: dışa açık bir adreste belirteçsiz
+  // imzalama uçları SERVİS DIŞI kalır (yalnız uyarı basmak bir denetim değildir).
+  policy.setBinding(CONFIG.host);
+
   // paper.css derlenmiş olsun
   try { paper.build(); } catch (err) { console.warn('paper.css derlenemedi:', err.message); }
 
@@ -1413,9 +1417,9 @@ function start() {
 
     const dısaAcik = CONFIG.host !== '127.0.0.1' && CONFIG.host !== 'localhost' && CONFIG.host !== '::1';
     if (dısaAcik && !policy.authEnabled()) {
-      console.warn('\n  ⚠ UYARI: sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
-        'tanımlı değil.\n    İmzalama ve PFX uçları kimlik doğrulamasız erişilebilir. ' +
-        'API_TOKENS ayarlayın.\n');
+      console.warn('\n  ⚠ Sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
+        'tanımlı değil.\n    İmzalama, PFX ve LTV uçları 503 döndürecek. ' +
+        'Kullanmak için API_TOKENS ayarlayın.\n');
     }
     console.log(`  Not: Varsayılan akışta özel anahtar tarayıcıdan çıkmaz.\n`);
   });

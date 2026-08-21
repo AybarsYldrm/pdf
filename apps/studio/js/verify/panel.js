@@ -21,6 +21,8 @@ const SUB_INDICATION_TR = {
   OUT_OF_BOUNDS_NO_POE: 'Doğrulama zamanı sertifika geçerlilik aralığı dışında',
   CHAIN_CONSTRAINTS_FAILURE: 'Sertifika zinciri kısıtları sağlanmıyor',
   SIG_CONSTRAINTS_FAILURE: 'İmza zorunlu kısıtları sağlamıyor',
+  CRYPTO_CONSTRAINTS_FAILURE_NO_POE:
+    'Kullanılan algoritma ya da anahtar uzunluğu artık güvenli sayılmıyor',
   DOC_MODIFIED_AFTER_SIGNING:
     'İmza geçerli ama belge imzalandıktan sonra değiştirilmiş — ' +
     'imza yalnız kapsadığı ilk bölümü doğrular',
