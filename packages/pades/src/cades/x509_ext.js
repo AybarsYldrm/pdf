@@ -106,10 +106,26 @@ function getSerial(certDer) {
   return certDer.slice(f.serial.start, f.serial.end);
 }
 
-/** Sertifika kendi kendini mi imzalamış (subject === issuer)? */
+/**
+ * Sertifika kendi kendini mi imzalamış (subject === issuer)?
+ *
+ * BOŞ İSİMLER EŞİT SAYILMAZ. Bozuk DER'de alan konumlandırma başarısız
+ * olduğunda hem subject hem issuer boş tampon dönebiliyordu; `equals` bunları
+ * eşit bulup "kendinden imzalı" diyordu. Bu, zincir kurulumunu çöp bir
+ * "kök"te sonlandırıyor ve iptal denetiminde o sertifikayı atlatıyordu
+ * (kendinden imzalı kökler iptal denetiminden muaftır).
+ *
+ * Issuer alanı X.509'da BOŞ OLAMAZ (RFC 5280 §4.1.2.4); subject boş olabilir
+ * (kimlik SAN'da taşınıyorsa) ama o durumda issuer'a eşit olmaz. Bu yüzden
+ * ölçüt: issuer gerçek bir isim olmalı ve subject ona eşit olmalı.
+ */
 function isSelfSigned(certDer) {
   try {
-    return getSubjectDer(certDer).equals(getIssuerDer(certDer));
+    const subject = getSubjectDer(certDer);
+    const issuer = getIssuerDer(certDer);
+    // 0x30 0x00 = boş SEQUENCE; ondan kısası zaten bir isim değildir.
+    if (!issuer || issuer.length <= 2) return false;
+    return subject.equals(issuer);
   } catch {
     return false;
   }

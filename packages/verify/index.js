@@ -132,6 +132,33 @@ async function verifyPdf(pdfBuffer, opts = {}) {
     report.warnings.push(...revisionDiff.errors);
   }
 
+  // Bir belgede kaç imza olabileceğinin ÜST SINIRI vardır.
+  //
+  // Her imza kendi zincirini kurar, kendi iptal kanıtını arar ve kapsamı
+  // farklıysa belgeyi yeniden açtırır. Binlerce imza taşıyan bir belge,
+  // doğrulayanın işlemcisini tüketmek için yeterlidir. Sınır aşılırsa
+  // doğrulama YAPILMAZ ve bu açıkça bildirilir — sessizce ilk N tanesini
+  // doğrulamak, kalanların durumunu bilinmiyorken bilinir göstermek olurdu.
+  const maxSignatures = Number.isInteger(opts.maxSignatures) && opts.maxSignatures > 0
+    ? opts.maxSignatures : 128;
+  if (signatures.length > maxSignatures) {
+    report.warnings.push(
+      `Belgede ${signatures.length} imza alanı var (sınır ${maxSignatures}); ` +
+      'doğrulama yapılmadı. Sınırı yükseltmek için maxSignatures verin.');
+    return report;
+  }
+
+  // Aynı kapsam için karşılaştırmayı BİR KEZ yap. İki farklı imza aynı
+  // baytlara kadar uzanıyorsa sonuç da aynıdır; belgeyi imza başına
+  // yeniden açmak yalnız iş üretir.
+  const diffCache = new Map([[maxCovered, revisionDiff]]);
+  const diffFor = (covered) => {
+    if (!diffCache.has(covered)) {
+      diffCache.set(covered, analyzeIncrementalChanges(pdfBuffer, covered));
+    }
+    return diffCache.get(covered);
+  };
+
   for (const sig of signatures) {
     report.signatures.push(
       await verifyOneSignature(sig, {
@@ -144,10 +171,9 @@ async function verifyPdf(pdfBuffer, opts = {}) {
         requireRevocation: opts.requireRevocation === true,
         allowHosts: opts.allowHosts,
         denyHosts: opts.denyHosts,
-        // En geniş kapsama göre yapılan karşılaştırma her imza için aynıdır;
-        // belgeyi imza başına yeniden açmak gereksiz iştir.
-        revisionDiff: sig.byteRange && (sig.byteRange[2] + sig.byteRange[3]) === maxCovered
-          ? revisionDiff : null,
+        // Kapsam başına önbelleklenmiş karşılaştırma.
+        revisionDiff: sig.byteRange && sig.byteRange.length >= 4
+          ? diffFor(sig.byteRange[2] + sig.byteRange[3]) : null,
         ignoreTimestampPoe: !!opts.ignoreTimestampPoe,
         // Seviye belirlemesi metin aramasıyla DEĞİL, ayrıştırılmış imza
         // alanlarıyla yapılır (bkz. determineLevel)
