@@ -269,7 +269,8 @@ test('DSS: sahte OCSP kanıtı gömülü belge B-LT seviyesine YÜKSELMEZ', asyn
   // BAŞKA bir sertifika için alınmış geçerli imzalı bir "good" OCSP yanıtı
   // koyar ve belgeyi "uzun vadeli doğrulanabilir" diye sunar.
   const manager = new PAdESManager({
-    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
   const p = pki.profile('signer');
   const { pdf } = await manager.sign({
@@ -306,7 +307,8 @@ test('DSS: sahte OCSP kanıtı gömülü belge B-LT seviyesine YÜKSELMEZ', asyn
 
 test('DSS: MEŞRU kanıtla imzalanan belge B-LT olur (olumlu kontrol)', async () => {
   const manager = new PAdESManager({
-    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
   const p = pki.profile('signer');
   const { pdf } = await manager.sign({
@@ -429,7 +431,8 @@ test('TSA: EKU\'suz ARŞİV damgası TOTAL-FAILED verir (uyarı değil)', async 
 
 test('TSA: MEŞRU damga geçerli sayılır (olumlu kontrol)', async () => {
   const manager = new PAdESManager({
-    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaUrl: svc.endpoints.tsa, tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
   const p = pki.profile('signer');
   const { pdf } = await manager.sign({

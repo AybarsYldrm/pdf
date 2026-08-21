@@ -16,12 +16,24 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const { Registry } = require('@fitfak/registry');
+const { Registry, documentHash } = require('@fitfak/registry');
 
 const CONFIG = {
   port: Number(process.env.SCANNER_PORT) || 8080,
   host: process.env.SCANNER_HOST || '127.0.0.1',
+  /**
+   * Kimlik sorgusu için gövde sınırı — bir özet ve bir belge numarası
+   * birkaç yüz bayttır; 64 KB zaten cömerttir.
+   */
   maxBodyBytes: Number(process.env.SCANNER_MAX_BODY) || 64 * 1024,
+  /**
+   * Dosyanın kendisi gönderildiğinde geçerli sınır.
+   *
+   * Karekod nakli saldırısını yalnız DOSYADAN hesaplanan özet kapatır, bu
+   * yüzden dosya kabul edilir — ama sınırsız değil. İki ayrı sınır var
+   * çünkü iki ayrı kullanım var: kimlik sorgusu ucuzdur, dosya değil.
+   */
+  maxPdfBytes: Number(process.env.SCANNER_MAX_PDF) || 8 * 1024 * 1024,
   requestTimeoutMs: Number(process.env.SCANNER_TIMEOUT_MS) || 15_000,
   headersTimeoutMs: Number(process.env.SCANNER_HEADERS_TIMEOUT_MS) || 10_000,
   /**
@@ -145,7 +157,10 @@ function lookup({ hash, docNo }) {
     // Kaydın NE ANLAMA GELDİĞİ cevabın içinde durur: kullanıcı "doğrulandı"
     // damgasının kapsamını tahmin etmek zorunda kalmasın.
     scope: 'Kayıt, imzanın atıldığı andaki doğrulamadır; sertifika o tarihten ' +
-           'sonra iptal edilmiş olabilir.',
+           'sonra iptal edilmiş olabilir. Yalnız kimlikle sorgulandığında ' +
+           '(binding: claimed) bu cevap ELİNİZDEKİ dosya hakkında değil, o ' +
+           'kimliğe sahip belge hakkındadır — karekod başka bir belgeden ' +
+           'alınmış olabilir. Kesin bağ için dosyanın kendisini gönderin.',
     timestamp: now
   };
 }
@@ -216,7 +231,7 @@ function createServer() {
 
       let body;
       try {
-        body = await readBody(req, CONFIG.maxBodyBytes);
+        body = await readBody(req, CONFIG.maxPdfBytes);
       } catch (err) {
         if (!res.headersSent) {
           sendJson(res, err.status || 400, { status: 'error', message: err.message });
@@ -233,8 +248,61 @@ function createServer() {
         return sendJson(res, 400, { status: 'error', message: 'Geçersiz JSON gövdesi.' });
       }
 
-      const hash = typeof parsed.hash === 'string' ? parsed.hash.trim() : '';
+      // Dosya YOKSA kimlik sorgusu sınırı geçerlidir: büyük bir gövdeyi
+      // "belki içinde pdf vardır" diye kabul etmek sınırı anlamsızlaştırır.
+      if (!parsed.pdf && body.length > CONFIG.maxBodyBytes) {
+        return sendJson(res, 413, {
+          status: 'error',
+          message: `Kimlik sorgusu gövdesi çok büyük (sınır ${CONFIG.maxBodyBytes} bayt).`
+        });
+      }
+
+      let hash = typeof parsed.hash === 'string' ? parsed.hash.trim() : '';
       const docNo = typeof parsed.docNo === 'string' ? parsed.docNo.trim().slice(0, 128) : '';
+
+      /*
+       * BELGENİN KENDİSİ VERİLİRSE ÖZET HESAPLANIR.
+       *
+       * QR bir kanıt değildir: üzerinde durduğu belgeyle arasında hiçbir bağ
+       * yoktur. Gerçek bir belgenin karekodunu kesip sahte bir belgeye
+       * yapıştıran biri, yalnız kimliğe bakan bir tarayıcıdan "doğrulandı"
+       * cevabı alır — imzalayanın adıyla birlikte. Bu saldırının adı
+       * karekod nakli (QR transplant) ve yalnız tek bir şey onu kapatır:
+       * özetin ELDEKİ DOSYADAN hesaplanması.
+       *
+       * Bu yüzden cevapta `binding` alanı var: `computed` (dosya görüldü,
+       * özet hesaplandı) ya da `claimed` (yalnız kimlik verildi).
+       */
+      let binding = 'claimed';
+      if (typeof parsed.pdf === 'string' && parsed.pdf) {
+        let pdf;
+        try {
+          pdf = Buffer.from(parsed.pdf, 'base64');
+        } catch {
+          return sendJson(res, 400, { status: 'error', message: 'pdf alanı base64 değil.' });
+        }
+        if (!pdf.length || pdf.length > CONFIG.maxPdfBytes) {
+          return sendJson(res, 400, {
+            status: 'error', message: 'pdf alanı boş ya da sınırı aşıyor.'
+          });
+        }
+        const hesaplanan = documentHash(pdf);
+        if (hash && hash.toLowerCase() !== hesaplanan) {
+          // Karekodun söylediği ile dosyanın kendisi UYUŞMUYOR. Bu, tam
+          // olarak karekod nakli belirtisidir ve sessizce geçilemez.
+          return sendJson(res, 200, {
+            status: 'invalid',
+            message: 'Karekoddaki kimlik, elinizdeki dosyayla uyuşmuyor. ' +
+              'Karekod başka bir belgeden alınmış olabilir.',
+            documentId: hesaplanan,
+            claimedId: hash,
+            binding: 'mismatch',
+            timestamp: new Date().toISOString()
+          });
+        }
+        hash = hesaplanan;
+        binding = 'computed';
+      }
 
       if (hash && !/^[0-9a-fA-F]{32,128}$/.test(hash)) {
         return sendJson(res, 400, {
@@ -245,11 +313,11 @@ function createServer() {
       if (!hash && !docNo) {
         return sendJson(res, 400, {
           status: 'error',
-          message: 'hash ya da docNo alanlarından biri gerekli.'
+          message: 'hash, docNo ya da pdf alanlarından biri gerekli.'
         });
       }
 
-      return sendJson(res, 200, lookup({ hash, docNo }));
+      return sendJson(res, 200, { ...lookup({ hash, docNo }), binding });
     }
 
     sendJson(res, 404, { status: 'error', message: 'Bulunamadı.' });

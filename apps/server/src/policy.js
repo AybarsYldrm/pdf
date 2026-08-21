@@ -149,9 +149,10 @@ function checkPdf(buffer, doc) {
  *   compute    `/api/render`, `/api/pdf/*`, `/api/verify` — pahalı ama zararsız
  *   sensitive  `/api/sign/*`, `/api/pfx/*`, `/api/ltv/*` — anahtar/kimlik dokunur
  *
- * Belirteç (token) yapılandırılmadıysa sunucu YALNIZ yerel arayüze bağlanır
- * ve uyarı basar. Dışarıya açık bir adrese bağlanıp belirteç istememek,
- * imzalama yeteneğini internete açmak demektir.
+ * Belirteç (token) yapılandırılmadıysa hassas uçlar YALNIZ yerel arayüzde
+ * çalışır. Dışa açık bir adreste belirteçsiz imzalama, PFX ve LTV uçları
+ * 503 ile reddedilir: uyarı basmak bir denetim değildir, ve "yanlışlıkla
+ * açık kalan bir dağıtım" tam olarak böyle olur.
  */
 const AUTH = {
   /** Virgülle ayrılmış belirteçler; hiçbiri yoksa kimlik doğrulama kapalıdır. */
@@ -159,8 +160,29 @@ const AUTH = {
     .split(',').map((t) => t.trim()).filter(Boolean),
 
   /** Yalnız hassas uçlar korunsun (varsayılan) ya da hepsi. */
-  scope: (process.env.API_AUTH_SCOPE || 'sensitive').toLowerCase()
+  scope: (process.env.API_AUTH_SCOPE || 'sensitive').toLowerCase(),
+
+  /**
+   * Sunucunun bağlandığı adres. `start()` tarafından bildirilir.
+   *
+   * Yerel arayüze bağlıysa belirteç yokluğu kabul edilebilir bir geliştirme
+   * varsayımıdır. Dışa açık bir adreste DEĞİLDİR: orada belirteçsiz bir
+   * imzalama ucu, internete açık bir imzalama hizmeti demektir.
+   */
+  boundHost: null
 };
+
+/** Sunucunun bağlandığı adresi bildirir (yetki kararı buna bakar). */
+function setBinding(host) {
+  AUTH.boundHost = host ? String(host) : null;
+}
+
+/** Bağlanılan adres yerel arayüz dışında mı? */
+function isExposed() {
+  const h = AUTH.boundHost;
+  if (!h) return false;                     // bilinmiyorsa varsayım: yerel
+  return !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(h);
+}
 
 /** Uç adına göre sınıf. */
 function classify(routeKey) {
@@ -212,6 +234,18 @@ function authorize(req, routeKey) {
   if (kind === 'public') return { allowed: true, kind };
 
   if (!authEnabled()) {
+    // UYARI BİR DENETİM DEĞİLDİR. Eskiden burada yalnız konsola bir uyarı
+    // basılıyor, istek yine de işleniyordu: dışa açık bir adrese bağlanmış
+    // belirteçsiz bir sunucu, imzalama ve PFX uçlarını internete açıyordu.
+    // Yerelde geliştirme yaparken belirteç istememek makul; dışarıda değil.
+    if (kind === 'sensitive' && isExposed()) {
+      return {
+        allowed: false, kind, status: 503, code: 'ERR_AUTH_NOT_CONFIGURED',
+        message: 'Sunucu dışa açık bir adrese bağlı ama API_TOKENS tanımlı ' +
+          'değil. İmzalama, PFX ve LTV uçları kimlik doğrulaması olmadan ' +
+          'kullanılamaz.'
+      };
+    }
     // Belirteç yapılandırılmamış: yalnız yerel kullanım varsayımı
     return { allowed: true, kind, unauthenticated: true };
   }
@@ -361,5 +395,6 @@ module.exports = {
   LIMITS, RATE, REMOTE, AUTH, PolicyError,
   checkBytes, checkCount, checkPdf,
   authorize, authEnabled, classify, clientKey, presentedToken, tokenValid,
+  setBinding, isExposed,
   RateLimiter, auditLog, trustAnchors
 };

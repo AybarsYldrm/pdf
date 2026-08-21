@@ -162,6 +162,52 @@ test('DEĞİŞTİRİLMİŞ belge kayıtta bulunamaz', async () => {
     'değiştirilmiş belge "doğrulandı" dememeli');
 });
 
+/* ================================================================== */
+/* Karekod nakli (QR transplant)                                       */
+/* ================================================================== */
+
+test('dosyanın kendisi verilirse özet HESAPLANIR (binding: computed)', async () => {
+  const { pdf } = await signDocument('DOC-BAG-1');
+
+  const r = await verify({ pdf: b64(pdf) });
+  assert.strictEqual(r.body.status, 'verified', JSON.stringify(r.body));
+  assert.strictEqual(r.body.binding, 'computed',
+    'dosya görüldüyse bağ hesaplanmış olmalı');
+  assert.strictEqual(r.body.documentId, documentHash(pdf));
+});
+
+test('yalnız kimlikle sorgu "claimed" olarak işaretlenir', async () => {
+  const { pdf } = await signDocument('DOC-BAG-2');
+
+  const r = await verify({ hash: documentHash(pdf) });
+  assert.strictEqual(r.body.status, 'verified');
+  assert.strictEqual(r.body.binding, 'claimed',
+    'dosya görülmediyse cevap ELDEKİ belge hakkında değildir');
+  assert.match(r.body.scope, /karekod başka bir belgeden/i,
+    'bu sınır cevabın içinde yazmalı');
+});
+
+test('KAREKOD NAKLİ: gerçek karekod sahte belgeye yapıştırılamaz', async () => {
+  // Saldırı: gerçek, imzalı bir belgenin karekodu kesilip sahte bir belgeye
+  // yapıştırılır. Yalnız kimliğe bakan bir tarayıcı "doğrulandı" der — üstelik
+  // gerçek imzalayanın adıyla. Bunu kapatan tek şey, özetin ELDEKİ DOSYADAN
+  // hesaplanmasıdır.
+  const { pdf: gercek } = await signDocument('DOC-NAKIL');
+  const sahte = Buffer.concat([gercek, Buffer.from('\n% sahte belge\n', 'latin1')]);
+
+  const r = await verify({
+    hash: documentHash(gercek),        // karekodun taşıdığı kimlik: GERÇEK
+    pdf: b64(sahte)                    // elde tutulan dosya: SAHTE
+  });
+
+  assert.strictEqual(r.body.status, 'invalid', JSON.stringify(r.body));
+  assert.strictEqual(r.body.binding, 'mismatch');
+  assert.match(r.body.message, /uyuşmuyor/i);
+  assert.strictEqual(r.body.documentId, documentHash(sahte),
+    'cevap ELDEKİ dosyanın kimliğini bildirmeli');
+  assert.strictEqual(r.body.claimedId, documentHash(gercek));
+});
+
 test('kayıtsız belge için "kayıtlı değil" denir, "geçersiz" denmez', async () => {
   const r = await verify({ hash: crypto.randomBytes(32).toString('hex') });
   assert.strictEqual(r.body.status, 'unverified');

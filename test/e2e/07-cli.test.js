@@ -72,10 +72,13 @@ test.after(async () => {
   if (workDir) fs.rmSync(workDir, { recursive: true, force: true });
 });
 
+// Test PKI'ı 127.0.0.1'de çalışır: sertifikalardaki AIA/CDP adresleri
+// loopback'i gösterir ve varsayılan SSRF engeline takılır. Kurum içi PKI
+// senaryosunun karşılığı olan bayrak açıkça verilir.
 const signArgs = (input, output, extra = []) => [
   'sign', input, '-o', output,
   '--pfx', at('kimlik.p12'), '--password', 'test',
-  '--tsa', svc.endpoints.tsa, ...extra
+  '--tsa', svc.endpoints.tsa, '--allow-private-pki', ...extra
 ];
 
 const verifyArgs = (input, extra = []) =>
@@ -137,7 +140,7 @@ test('sign: LT seviyesi LTV verisini gömer', async () => {
 
 test('extend: imzayı LTA seviyesine yükseltir', async () => {
   const extended = await run(['extend', at('lt.pdf'), '--to', 'LTA',
-    '-o', at('lta.pdf'), '--tsa', svc.endpoints.tsa]);
+    '-o', at('lta.pdf'), '--tsa', svc.endpoints.tsa, '--allow-private-pki']);
 
   assert.strictEqual(extended.code, 0, extended.stderr);
   assert.match(extended.stderr, /gömülen: \d+ sertifika/);
@@ -198,7 +201,11 @@ test('edit: imzalı belge artımlı düzenlenir, imza geçerli kalır', async ()
   const verified = await run(verifyArgs(at('duzenli.pdf'), ['--json']));
   const report = JSON.parse(verified.stdout);
 
-  assert.strictEqual(report.signatures[0].indication, 'TOTAL-PASSED');
+  // İmza kapsadığı sürüm için geçerli, ama belge o sürüm değil: CLI de
+  // yeşil tik göstermemeli. `cms.signatureValid` ayrımı raporda duruyor.
+  assert.strictEqual(report.signatures[0].cms.signatureValid, true);
+  assert.strictEqual(report.signatures[0].indication, 'INDETERMINATE');
+  assert.strictEqual(report.signatures[0].subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
   assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
     'değişiklik gizlenmemeli');
 });

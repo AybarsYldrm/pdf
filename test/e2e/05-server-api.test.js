@@ -48,6 +48,11 @@ test.before(async () => {
   // varsayılanın kapalı olduğu ayrıca sınanır.
   mod.CONFIG.allowServerSidePfx = true;
 
+  // Test PKI'ı 127.0.0.1'de çalışır: sertifikalardaki AIA/CDP adresleri
+  // loopback'i gösterir. Sunucu bu adreslere VARSAYILAN OLARAK çıkmaz
+  // (SSRF); LTV yollarını sınayabilmek için açıkça açılır.
+  mod.CONFIG.allowPrivateNetworkPki = true;
+
   server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -478,10 +483,61 @@ test('İmzalı belge düzenlenince imza geçerli kalır (uçtan uca)', async () 
   const report = await verifyPdf(unb64(edited.body.pdf), {
     trustAnchors: [svc.pki.root.certPem], offline: true
   });
-  assert.strictEqual(report.signatures[0].indication, INDICATION.PASSED);
+  // İmzanın KRİPTOGRAFİSİ bozulmadı — ama belge imzalandığı hâlde değil.
+  // Doğrulayıcı bu ikisini ayırır: `cms.signatureValid` true kalır,
+  // `indication` TOTAL-PASSED olmaz. Düzenlemeyi yapan biz olsak da,
+  // doğrulayan taraf bunu saldırgan düzenlemesinden ayırt edemez.
   assert.strictEqual(report.signatures[0].cms.signatureValid, true);
+  assert.strictEqual(report.signatures[0].indication, INDICATION.INDETERMINATE);
+  assert.strictEqual(report.signatures[0].subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
   assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
     'değişiklik gizlenmemeli');
+});
+
+test('dışa açık adres + belirteçsiz kurulum: hassas uçlar SERVİS DIŞI', async () => {
+  const policy = require('../../apps/server/src/policy');
+  const oncekiTokens = policy.AUTH.tokens.slice();
+  const oncekiHost = policy.AUTH.boundHost;
+
+  try {
+    // Belirteç yok + dışa açık adres: bu, "yanlışlıkla açık kalan dağıtım".
+    policy.AUTH.tokens.length = 0;
+    policy.setBinding('0.0.0.0');
+    assert.strictEqual(policy.isExposed(), true);
+
+    const fakeReq = { headers: {} };
+    for (const rota of ['POST /api/sign/prepare', 'POST /api/sign/pfx',
+                        'POST /api/pfx/identities', 'POST /api/ltv/extend']) {
+      const karar = policy.authorize(fakeReq, rota);
+      assert.strictEqual(karar.allowed, false, `${rota} açık kalmış`);
+      assert.strictEqual(karar.code, 'ERR_AUTH_NOT_CONFIGURED');
+      assert.strictEqual(karar.status, 503);
+    }
+
+    // Zararsız uçlar etkilenmez: sunucu tamamen kullanılmaz hâle gelmemeli.
+    assert.strictEqual(policy.authorize(fakeReq, 'POST /api/render').allowed, true);
+    assert.strictEqual(policy.authorize(fakeReq, 'GET /api/health').allowed, true);
+
+    // Yerel arayüzde aynı kurulum çalışmaya devam eder (geliştirme akışı).
+    policy.setBinding('127.0.0.1');
+    assert.strictEqual(policy.authorize(fakeReq, 'POST /api/sign/prepare').allowed, true);
+
+    // Belirteç tanımlanınca dışa açık adres de kullanılabilir.
+    policy.setBinding('0.0.0.0');
+    policy.AUTH.tokens.push('cok-gizli-belirtec');
+    const reddedilen = policy.authorize(fakeReq, 'POST /api/sign/prepare');
+    assert.strictEqual(reddedilen.allowed, false);
+    assert.strictEqual(reddedilen.status, 401, 'artık kimlik doğrulama isteniyor');
+
+    const kabul = policy.authorize(
+      { headers: { authorization: 'Bearer cok-gizli-belirtec' } },
+      'POST /api/sign/prepare');
+    assert.strictEqual(kabul.allowed, true);
+  } finally {
+    policy.AUTH.tokens.length = 0;
+    policy.AUTH.tokens.push(...oncekiTokens);
+    policy.setBinding(oncekiHost);
+  }
 });
 
 test('sunucu tarafı PFX VARSAYILAN OLARAK kapalıdır', async () => {

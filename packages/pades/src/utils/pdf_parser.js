@@ -1075,6 +1075,15 @@ function findAllSignatures(pdfBuffer){
     // üretilmiş belgelerde belge zaman damgası /Type /Sig taşıyabiliyor.
     const resolvedType = (subFilter === 'ETSI.RFC3161') ? 'DocTimeStamp' : type;
 
+    // /Contents onaltılığının dosyadaki GERÇEK konumu.
+    //
+    // Doğrulayıcının, ByteRange'in dışarıda bıraktığı boşluğun tam olarak bu
+    // aralık olduğunu sınayabilmesi için gerekir. Bu bilgi olmadan saldırgan
+    // boşluğu genişletip imzasız içerik saklayabilir. `latin1` bire bir bayt
+    // eşlemesi olduğu için dizge konumu = bayt konumu.
+    const matchEnd = m.index + m[0].length;      // '>' karakterinden hemen sonrası
+    const contentsStart = matchEnd - contentsHex.length - 2;  // '<' karakterinin konumu
+
     out.push({
       contentsHex,
       cmsDer: withZeros.slice(0, cmsLen),
@@ -1082,7 +1091,9 @@ function findAllSignatures(pdfBuffer){
       subFilter,
       type: resolvedType,
       rawType: type,
-      byteRange
+      byteRange,
+      contentsStart,
+      contentsEnd: matchEnd
     });
   }
   return out;

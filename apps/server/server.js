@@ -55,7 +55,13 @@ const CONFIG = {
   fontDir: process.env.FONT_DIR || path.join(ROOT, 'assets'),
   // Belgeden gelen varlıkların okunabileceği TEK dizin (kum havuzu).
   // Depo kökü VERİLMEZ: güvenilmez HTML kaynak kodunu ve anahtarları okurdu.
-  assetRoot: process.env.ASSET_ROOT || path.join(ROOT, 'assets')
+  assetRoot: process.env.ASSET_ROOT || path.join(ROOT, 'assets'),
+  // Sertifikadan gelen adreslerin (AIA / CDP / OCSP) özel ağa çıkması
+  // VARSAYILAN OLARAK KAPALIDIR. Bu adresleri imzalayan değil, sertifikayı
+  // üreten yazar; sunucu onlara körü körüne istek atarsa saldırganın iç ağa
+  // uzanan eli olur (`http://169.254.169.254/…`, `http://127.0.0.1:8500/…`).
+  // Kurum içi bir PKI kullanılıyorsa bilinçli olarak açılır.
+  allowPrivateNetworkPki: process.env.ALLOW_PRIVATE_PKI === '1'
 };
 
 /* ------------------------------------------------------------------ */
@@ -311,7 +317,8 @@ const unb64 = (s) => Buffer.from(String(s || ''), 'base64');
 
 const manager = () => new PAdESManager({
   tsaUrl: CONFIG.tsaUrl,
-  tsaOptions: { hashName: 'sha256', certReq: true }
+  tsaOptions: { hashName: 'sha256', certReq: true },
+  allowPrivateNetwork: CONFIG.allowPrivateNetworkPki
 });
 
 const routes = {
@@ -1002,6 +1009,9 @@ const routes = {
     const report = await verifyPdf(pdf, {
       trustAnchors: body.trustAnchors || undefined,
       allowNetwork: body.allowNetwork === true,
+      // İstek gövdesinden GELMEZ: iç ağa çıkma izni bir istemci kararı
+      // olamaz, yoksa /api/verify açık bir SSRF aracına dönüşür.
+      allowPrivateNetwork: CONFIG.allowPrivateNetworkPki,
       useEmbeddedRevocation: body.useEmbeddedRevocation !== false
     });
     sendJson(res, 200, report);
@@ -1384,6 +1394,10 @@ function start() {
   CONFIG.host = process.env.HOST || CONFIG.host;
   CONFIG.tsaUrl = process.env.TSA_URL || CONFIG.tsaUrl;
 
+  // Yetki kararı bağlanılan adrese bakar: dışa açık bir adreste belirteçsiz
+  // imzalama uçları SERVİS DIŞI kalır (yalnız uyarı basmak bir denetim değildir).
+  policy.setBinding(CONFIG.host);
+
   // paper.css derlenmiş olsun
   try { paper.build(); } catch (err) { console.warn('paper.css derlenemedi:', err.message); }
 
@@ -1403,9 +1417,9 @@ function start() {
 
     const dısaAcik = CONFIG.host !== '127.0.0.1' && CONFIG.host !== 'localhost' && CONFIG.host !== '::1';
     if (dısaAcik && !policy.authEnabled()) {
-      console.warn('\n  ⚠ UYARI: sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
-        'tanımlı değil.\n    İmzalama ve PFX uçları kimlik doğrulamasız erişilebilir. ' +
-        'API_TOKENS ayarlayın.\n');
+      console.warn('\n  ⚠ Sunucu dışa açık bir adrese bağlandı ama API_TOKENS ' +
+        'tanımlı değil.\n    İmzalama, PFX ve LTV uçları 503 döndürecek. ' +
+        'Kullanmak için API_TOKENS ayarlayın.\n');
     }
     console.log(`  Not: Varsayılan akışta özel anahtar tarayıcıdan çıkmaz.\n`);
   });

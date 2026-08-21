@@ -15,6 +15,7 @@ const {
   extractAIA, extractCDP, isSelfSigned, getSubjectDer, derToPem, collectCertificates
 } = require('./x509_ext');
 const { pemToDer } = require('./x509_extract');
+const { netOptions } = require('@fitfak/netguard');
 
 /**
  * OCSP yanıtını Adobe'un beklediği tam OCSPResponse zarfına sarar (RFC 6960).
@@ -83,7 +84,11 @@ async function collectForCertificate(certDer, issuerDer, opts = {}) {
     const issuerPem = derToPem(issuerDer);
     for (const url of aiaUrls) {
       try {
-        const res = await fetchOCSPForCert(certPem, issuerPem, url, { headers: opts.headers || {} });
+        const res = await fetchOCSPForCert(certPem, issuerPem, url, {
+          headers: opts.headers || {},
+          timeoutMs: opts.timeoutMs,
+          ...netOptions(opts)
+        });
         if (res.certStatus === 'revoked') {
           out.status = 'revoked';
           out.sources.push({ type: 'ocsp', url, status: 'revoked' });
@@ -113,7 +118,8 @@ async function collectForCertificate(certDer, issuerDer, opts = {}) {
         const res = await fetchAndCheckCrl(certDer, issuerDer, url, {
           validationTime: opts.validationTime,
           headers: opts.headers,
-          timeoutMs: opts.timeoutMs
+          timeoutMs: opts.timeoutMs,
+          ...netOptions(opts)
         });
         if (res.status === 'revoked') {
           out.status = 'revoked';

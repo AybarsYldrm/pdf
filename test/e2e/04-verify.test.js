@@ -24,7 +24,8 @@ test.before(async () => {
   svc = await startTestServices();
   manager = new PAdESManager({
     tsaUrl: svc.endpoints.tsa,
-    tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
   anchors = [svc.pki.root.certPem];
 });
@@ -174,7 +175,8 @@ test('İPTAL edilmiş sertifika doğrulamada yakalanır', async () => {
   svc.revoke(ext.getSerial(ext.pemToDer(p.certPem)).toString('hex'), 1);
 
   const r = await verifyPdf(pdf, {
-    trustAnchors: anchors, allowNetwork: true, useEmbeddedRevocation: false
+    trustAnchors: anchors, allowNetwork: true, useEmbeddedRevocation: false,
+    allowPrivateNetwork: true            // test OCSP/CRL uçları 127.0.0.1'de
   });
   const s = r.signatures[0];
   assert.strictEqual(s.indication, INDICATION.FAILED);

@@ -4,6 +4,7 @@ const fs = require('fs');
 const { PDFPAdESWriter, ensureAcroFormAndEmptySigField } = require('../utils/pdf_parser');
 const { pemToDer, parseCertBasics, parseKeyUsageAndEKU, extractSubjectCN } = require('../cades/x509_extract');
 const { buildTSQ, requestTimestamp, extractTimeStampTokenOrThrow } = require('../timestamp/rfc3161');
+const { pkiFetch, netOptions } = require('@fitfak/netguard');
 const { OIDS } = require('../cades/oids');
 const { buildCAdES_BES_auto, buildCAdES_BES_withSigner, addUnsignedAttr_signatureTimeStampToken, buildSignedData } = require('../cades/cades_builder');
 const { resolveSigner } = require('../signer');
@@ -60,8 +61,20 @@ function wrapToFullOCSPResponse(basicDer) {
 }
 
 class PAdESManager {
-  constructor({ tsaUrl, tsaOptions = {}, tsaHeaders = {}, logger = null }) {
+  constructor({ tsaUrl, tsaOptions = {}, tsaHeaders = {}, logger = null,
+                allowPrivateNetwork = false }) {
     this.tsaUrl = tsaUrl;
+    /**
+     * Sertifikadan gelen adresler (AIA, CDP, OCSP) özel ağa çıkabilsin mi?
+     *
+     * VARSAYILAN HAYIR. Bu adresleri imzalayan değil, sertifikayı üreten
+     * yazar; doğrulayıcı onlara körü körüne istek atarsa saldırganın ağ
+     * içine uzanan eli olur. Kurum içi bir PKI kullanılıyorsa bilinçli
+     * olarak açılır.
+     *
+     * TSA adresi bu kısıta girmez: onu operatör yapılandırır, saldırgan değil.
+     */
+    this.allowPrivateNetwork = allowPrivateNetwork === true;
     this.tsaOptions = tsaOptions; // { hashName, certReq, reqPolicyOid, nonceBytes }
     this.tsaHeaders = tsaHeaders; // { Authorization: 'Basic ...', ... }
     this._buildTSQ = buildTSQ;
@@ -449,7 +462,9 @@ class PAdESManager {
     strict = false,
     validationTime = null,
     fetchIssuers = true,
-    timeoutMs = 15000
+    timeoutMs = 15000,
+    allowHosts = undefined,
+    denyHosts = undefined
   }) {
     const {
       buildChain, collectCertificates, isSelfSigned, extractAIA, derToPem, getSubjectDer
@@ -505,9 +520,20 @@ class PAdESManager {
       const urls = extractAIA(certDer).caIssuers;
       for (const url of urls) {
         try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-          if (!res.ok) continue;
-          const buf = Buffer.from(await res.arrayBuffer());
+          // ADRES SALDIRGANDAN GELİR: AIA caIssuers URL'ini imzalayan değil,
+          // sertifikayı üreten yazar. Eski sürüm buraya çıplak `fetch()`
+          // atıyordu — hiçbir adres denetimi, boyut sınırı ya da yönlendirme
+          // kontrolü yoktu; doğrulayıcı `http://169.254.169.254/…` isteyen bir
+          // sertifikayla ağ içine uzanan bir aracıya dönüşüyordu.
+          const res = await pkiFetch(url, {
+            timeoutMs,
+            maxBytes: 4 * 1024 * 1024,
+            ...netOptions({
+              allowPrivateNetwork: this.allowPrivateNetwork, allowHosts, denyHosts
+            })
+          });
+          if (res.status !== 200) continue;
+          const buf = res.body;
           // Yanıt DER sertifika, PEM ya da PKCS#7 zinciri olabilir
           const found = collectCertificates(buf);
           if (found.length) return found;
@@ -593,7 +619,10 @@ class PAdESManager {
           prefer,
           validationTime: now,
           headers: ocspHeaders,
-          timeoutMs
+          timeoutMs,
+          allowPrivateNetwork: this.allowPrivateNetwork,
+          allowHosts,
+          denyHosts
         });
 
         for (const c of collected.certsDer) { sigPathCerts.push(c); pushGlobalCert(c); }

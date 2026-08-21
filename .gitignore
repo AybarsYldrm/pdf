@@ -161,3 +161,6 @@ packages/pdf-scene/dist/
 !test/fixtures/**/*.pfx
 !test/fixtures/**/*.p12
 !test/fixtures/certs/
+
+# Güvenlik denetimi exploit betikleri — repoya dahil edilmez
+.audit/

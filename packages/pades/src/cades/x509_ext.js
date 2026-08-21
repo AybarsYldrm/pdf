@@ -13,17 +13,23 @@
  * Burada uzantılar RFC 5280'e göre gerçekten ayrıştırılır.
  */
 
+const crypto = require('crypto');
 const { readTLV, oidFromBytes, pemToDer, parseCertBasics } = require('./x509_extract');
 
 const EXT_OIDS = {
   subjectKeyIdentifier:      '2.5.29.14',
   keyUsage:                  '2.5.29.15',
   subjectAltName:            '2.5.29.17',
+  issuerAltName:             '2.5.29.18',
   basicConstraints:          '2.5.29.19',
+  nameConstraints:           '2.5.29.30',
   cRLDistributionPoints:     '2.5.29.31',
   certificatePolicies:       '2.5.29.32',
+  policyMappings:            '2.5.29.33',
   authorityKeyIdentifier:    '2.5.29.35',
+  policyConstraints:         '2.5.29.36',
   extKeyUsage:               '2.5.29.37',
+  inhibitAnyPolicy:          '2.5.29.54',
   freshestCRL:               '2.5.29.46',
   authorityInfoAccess:       '1.3.6.1.5.5.7.1.1',
   subjectInfoAccess:         '1.3.6.1.5.5.7.1.11'
@@ -100,10 +106,26 @@ function getSerial(certDer) {
   return certDer.slice(f.serial.start, f.serial.end);
 }
 
-/** Sertifika kendi kendini mi imzalamış (subject === issuer)? */
+/**
+ * Sertifika kendi kendini mi imzalamış (subject === issuer)?
+ *
+ * BOŞ İSİMLER EŞİT SAYILMAZ. Bozuk DER'de alan konumlandırma başarısız
+ * olduğunda hem subject hem issuer boş tampon dönebiliyordu; `equals` bunları
+ * eşit bulup "kendinden imzalı" diyordu. Bu, zincir kurulumunu çöp bir
+ * "kök"te sonlandırıyor ve iptal denetiminde o sertifikayı atlatıyordu
+ * (kendinden imzalı kökler iptal denetiminden muaftır).
+ *
+ * Issuer alanı X.509'da BOŞ OLAMAZ (RFC 5280 §4.1.2.4); subject boş olabilir
+ * (kimlik SAN'da taşınıyorsa) ama o durumda issuer'a eşit olmaz. Bu yüzden
+ * ölçüt: issuer gerçek bir isim olmalı ve subject ona eşit olmalı.
+ */
 function isSelfSigned(certDer) {
   try {
-    return getSubjectDer(certDer).equals(getIssuerDer(certDer));
+    const subject = getSubjectDer(certDer);
+    const issuer = getIssuerDer(certDer);
+    // 0x30 0x00 = boş SEQUENCE; ondan kısası zaten bir isim değildir.
+    if (!issuer || issuer.length <= 2) return false;
+    return subject.equals(issuer);
   } catch {
     return false;
   }
@@ -345,6 +367,175 @@ function extractBasicConstraints(certDer) {
   return result;
 }
 
+/**
+ * KeyUsage (RFC 5280 §4.2.1.3) — BIT STRING'in DOKUZ bitinin tamamı.
+ *
+ * Depodaki eski `parseKeyUsageAndEKU()` yalnız üç bit okuyordu; `keyCertSign`
+ * okunmadığı için "bu sertifika başkasını imzalayabilir mi?" sorusu hiç
+ * sorulamıyordu. Yol doğrulaması bu bit olmadan yapılamaz.
+ *
+ * @returns {{ present:boolean, critical:boolean, digitalSignature:boolean,
+ *   contentCommitment:boolean, keyEncipherment:boolean, dataEncipherment:boolean,
+ *   keyAgreement:boolean, keyCertSign:boolean, cRLSign:boolean,
+ *   encipherOnly:boolean, decipherOnly:boolean }}
+ */
+const KU_BITS = ['digitalSignature', 'contentCommitment', 'keyEncipherment',
+  'dataEncipherment', 'keyAgreement', 'keyCertSign', 'cRLSign',
+  'encipherOnly', 'decipherOnly'];
+
+function extractKeyUsage(certDer) {
+  const out = { present: false, critical: false };
+  for (const n of KU_BITS) out[n] = false;
+
+  const ext = parseExtensions(certDer).get(EXT_OIDS.keyUsage);
+  if (!ext) return out;
+  out.present = true;
+  out.critical = ext.critical;
+
+  try {
+    const bs = readTLV(ext.value, 0);
+    if (bs.tag !== 0x03) return out;
+    // BIT STRING: ilk bayt kullanılmayan bit sayısı.
+    const unused = ext.value[bs.start];
+    const bits = ext.value.slice(bs.start + 1, bs.end);
+    const total = bits.length * 8 - unused;
+    for (let i = 0; i < KU_BITS.length && i < total; i++) {
+      out[KU_BITS[i]] = (bits[i >> 3] & (0x80 >> (i & 7))) !== 0;
+    }
+  } catch { /* bozuk uzantı: hiçbir bit set edilmemiş sayılır */ }
+  return out;
+}
+
+/**
+ * Extended Key Usage (RFC 5280 §4.2.1.12).
+ * @returns {{ present:boolean, critical:boolean, oids:string[] }}
+ */
+function extractEKU(certDer) {
+  const out = { present: false, critical: false, oids: [] };
+  const ext = parseExtensions(certDer).get(EXT_OIDS.extKeyUsage);
+  if (!ext) return out;
+  out.present = true;
+  out.critical = ext.critical;
+
+  try {
+    const seq = readTLV(ext.value, 0);
+    if (seq.tag !== 0x30) return out;
+    let p = seq.start;
+    while (p < seq.end) {
+      const o = readTLV(ext.value, p);
+      if (o.next <= p) break;
+      if (o.tag === 0x06) out.oids.push(oidFromBytes(ext.value.slice(o.start, o.end)));
+      p = o.next;
+    }
+  } catch { /* bozuk uzantı */ }
+  return out;
+}
+
+/* GeneralName etiketleri (bağlam-özel). */
+const GN = {
+  otherName: 0xA0, rfc822Name: 0x81, dNSName: 0x82, x400Address: 0xA3,
+  directoryName: 0xA4, ediPartyName: 0xA5, uri: 0x86, iPAddress: 0x87,
+  registeredID: 0x88
+};
+
+/** Tek bir GeneralName'i okunabilir bir çifte çevirir. */
+function readGeneralName(buf, tlv) {
+  switch (tlv.tag) {
+    case GN.rfc822Name:
+      return { type: 'rfc822Name', value: buf.slice(tlv.start, tlv.end).toString('latin1') };
+    case GN.dNSName:
+      return { type: 'dNSName', value: buf.slice(tlv.start, tlv.end).toString('latin1') };
+    case GN.uri:
+      return { type: 'uri', value: buf.slice(tlv.start, tlv.end).toString('latin1') };
+    case GN.iPAddress:
+      return { type: 'iPAddress', value: buf.slice(tlv.start, tlv.end) };
+    case GN.directoryName: {
+      // [4] EXPLICIT: Name bir CHOICE olduğu için içeride RDNSequence var.
+      const inner = readTLV(buf, tlv.start);
+      return { type: 'directoryName', value: buf.slice(inner.start - inner.hdr, inner.end) };
+    }
+    default:
+      return null;
+  }
+}
+
+/** subjectAltName içindeki GeneralName listesi (RFC 5280 §4.2.1.6). */
+function extractSAN(certDer) {
+  const out = { present: false, critical: false, names: [] };
+  const ext = parseExtensions(certDer).get(EXT_OIDS.subjectAltName);
+  if (!ext) return out;
+  out.present = true;
+  out.critical = ext.critical;
+  try {
+    const seq = readTLV(ext.value, 0);
+    if (seq.tag !== 0x30) return out;
+    let p = seq.start;
+    while (p < seq.end) {
+      const t = readTLV(ext.value, p);
+      if (t.next <= p) break;
+      const gn = readGeneralName(ext.value, t);
+      if (gn) out.names.push(gn);
+      p = t.next;
+    }
+  } catch { /* bozuk uzantı */ }
+  return out;
+}
+
+/**
+ * Name Constraints (RFC 5280 §4.2.1.10).
+ *
+ * NameConstraints ::= SEQUENCE {
+ *   permittedSubtrees [0] GeneralSubtrees OPTIONAL,
+ *   excludedSubtrees  [1] GeneralSubtrees OPTIONAL }
+ *
+ * @returns {{ present:boolean, critical:boolean,
+ *   permitted:Array<{type:string,value:*}>, excluded:Array<{type:string,value:*}> }}
+ */
+function extractNameConstraints(certDer) {
+  const out = { present: false, critical: false, permitted: [], excluded: [] };
+  const ext = parseExtensions(certDer).get(EXT_OIDS.nameConstraints);
+  if (!ext) return out;
+  out.present = true;
+  out.critical = ext.critical;
+
+  const readSubtrees = (seqTlv, into) => {
+    let p = seqTlv.start;
+    while (p < seqTlv.end) {
+      const sub = readTLV(ext.value, p);      // GeneralSubtree ::= SEQUENCE
+      if (sub.next <= p) break;
+      if (sub.tag === 0x30) {
+        const base = readTLV(ext.value, sub.start);
+        const gn = readGeneralName(ext.value, base);
+        if (gn) into.push(gn);
+      }
+      p = sub.next;
+    }
+  };
+
+  try {
+    const seq = readTLV(ext.value, 0);
+    if (seq.tag !== 0x30) return out;
+    let p = seq.start;
+    while (p < seq.end) {
+      const t = readTLV(ext.value, p);
+      if (t.next <= p) break;
+      if (t.tag === 0xA0) readSubtrees(t, out.permitted);
+      else if (t.tag === 0xA1) readSubtrees(t, out.excluded);
+      p = t.next;
+    }
+  } catch { /* bozuk uzantı */ }
+  return out;
+}
+
+/** Sertifikadaki KRİTİK uzantı OID'leri. */
+function criticalExtensionOids(certDer) {
+  const out = [];
+  for (const [oid, ext] of parseExtensions(certDer)) {
+    if (ext.critical) out.push(oid);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* Zincir kurulumu                                                      */
 /* ------------------------------------------------------------------ */
@@ -377,14 +568,50 @@ function isIssuerOf(childDer, candidateDer) {
 }
 
 /**
+ * Adayın açık anahtarı çocuğun imzasını GERÇEKTEN doğruluyor mu?
+ *
+ * @returns {boolean|null} true → doğruladı, false → doğrulamadı,
+ *   null → kanıt üretilemedi (desteklenmeyen algoritma, bozuk kodlama).
+ *   `null` "geçerli" demek DEĞİLDİR; yalnız "bilinmiyor" demektir ve
+ *   çağıran taraf bunu güven kararı olarak kullanmamalıdır.
+ */
+function verifiesAsIssuer(childDer, candidateDer) {
+  let child, cand;
+  try {
+    child = new crypto.X509Certificate(childDer);
+    cand = new crypto.X509Certificate(candidateDer);
+  } catch {
+    return null;
+  }
+  try {
+    return child.verify(cand.publicKey) === true;
+  } catch {
+    // Node desteklemeyen bir imza algoritması için atar. Bunu "geçerli"
+    // saymak, bilinmeyeni güvenliye çevirmek olurdu.
+    return null;
+  }
+}
+
+/**
  * Leaf'ten köke doğru zinciri kurar.
+ *
+ * İSİM EŞLEŞMESİ YETMEZ. Eski sürüm havuzdaki İLK isim/AKI eşleşmesini
+ * issuer kabul ediyordu. Bir saldırgan, kurbanın güvendiği CA ile aynı
+ * Subject DN'ye (ve istenirse aynı SKI'ye) sahip kendi sertifikasını
+ * havuza koyarak zinciri istediği yere bağlayabiliyordu. Artık aday,
+ * çocuğun imzasını kriptografik olarak doğrulamak zorundadır.
  *
  * @param {Buffer} leafDer
  * @param {Buffer[]} poolDer Aday sertifikalar (CMS'ten, OCSP'den, AIA'dan, kullanıcıdan)
+ * @param {Object} [opts]
+ * @param {Buffer[]} [opts.anchors] Güven deposundaki sertifikalar. Aynı ölçüde
+ *   geçerli iki aday varsa (çapraz imza) güven deposundaki tercih edilir;
+ *   böylece yol, ulaşılabilir bir köke bağlanır.
  * @returns {{ path: Buffer[], complete: boolean, anchor: Buffer|null, missingIssuerOf: Buffer|null }}
  *   `path` daima leaf ile başlar. `complete`, kendinden imzalı bir köke ulaşıldığında true olur.
  */
-function buildChain(leafDer, poolDer = []) {
+function buildChain(leafDer, poolDer = [], opts = {}) {
+  const anchorHex = new Set((opts.anchors || []).map((a) => a.toString('hex')));
   const path = [leafDer];
   const usedHex = new Set([leafDer.toString('hex')]);
   let current = leafDer;
@@ -393,12 +620,25 @@ function buildChain(leafDer, poolDer = []) {
     if (isSelfSigned(current)) {
       return { path, complete: true, anchor: current, missingIssuerOf: null };
     }
-    let issuer = null;
+
+    // Adayları kanıt gücüne göre ayır: doğrulanmış > bilinmiyor > reddedilmiş.
+    const proven = [];
+    const unknown = [];
     for (const cand of poolDer) {
       const hex = cand.toString('hex');
       if (usedHex.has(hex)) continue;
-      if (isIssuerOf(current, cand)) { issuer = cand; break; }
+      if (!isIssuerOf(current, cand)) continue;
+      const ok = verifiesAsIssuer(current, cand);
+      if (ok === true) proven.push(cand);
+      else if (ok === null) unknown.push(cand);
+      // ok === false → bu aday imzalamamış; sessizce atılır.
     }
+
+    // Güven deposundaki bir aday varsa yol oraya bağlanır.
+    const pick = (list) =>
+      list.find((c) => anchorHex.has(c.toString('hex'))) || list[0] || null;
+    const issuer = pick(proven) || pick(unknown);
+
     if (!issuer) {
       return { path, complete: false, anchor: null, missingIssuerOf: current };
     }
@@ -472,11 +712,17 @@ module.exports = {
   extractAKI,
   extractSKI,
   extractBasicConstraints,
+  extractKeyUsage,
+  extractEKU,
+  extractSAN,
+  extractNameConstraints,
+  criticalExtensionOids,
   getSubjectDer,
   getIssuerDer,
   getSerial,
   isSelfSigned,
   isIssuerOf,
+  verifiesAsIssuer,
   buildChain,
   collectCertificates,
   derToPem,

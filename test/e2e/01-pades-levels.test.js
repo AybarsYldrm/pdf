@@ -23,7 +23,8 @@ test.before(async () => {
   svc = await startTestServices();
   manager = new PAdESManager({
     tsaUrl: svc.endpoints.tsa,
-    tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
 });
 
@@ -250,7 +251,8 @@ test('İptal edilmiş sertifika: gevşek modda uyarı ile devam edilir', async (
 test('Seviye düşüşü sessiz olmaz: TSA erişilemezse rapor edilir', async () => {
   const badManager = new PAdESManager({
     tsaUrl: 'http://127.0.0.1:1/tsa',   // kapalı port
-    tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
   const p = svc.pki.profile('signer');
 

@@ -32,7 +32,8 @@ test.before(async () => {
   svc = await startTestServices();
   manager = new PAdESManager({
     tsaUrl: svc.endpoints.tsa,
-    tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
 });
 

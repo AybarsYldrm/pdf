@@ -466,11 +466,20 @@ function checkResponderAuthorization(responderDer, issuerDer) {
     return { authorized: true, cn, reason: null, warnings };
   }
 
-  // (b) Delege yanıtlayan
-  if (!ext.isIssuerOf(responderDer, issuerDer)) {
+  // (b) Delege yanıtlayan.
+  //
+  // "İhraç edilmiş" bir isim eşleşmesi DEĞİL, bir imzadır. Yalnız isme
+  // bakıldığında saldırgan şunu yapabiliyordu: Issuer alanına CA'nın DN'sini
+  // yazdığı, id-kp-OCSPSigning EKU'su taşıyan KENDİ sertifikasını üretir,
+  // onunla "good" yanıtı imzalar ve yanıtın içine koyar. Havuz saldırgandan
+  // geldiği için sertifika oradadır, isim eşleşir, EKU vardır — ve iptal
+  // edilmiş bir sertifika geçerli görünür.
+  if (!ext.isIssuerOf(responderDer, issuerDer) ||
+      ext.verifiesAsIssuer(responderDer, issuerDer) !== true) {
     return {
       authorized: false, cn, warnings,
-      reason: 'OCSP yanıtlayanı ne CA\'nın kendisi ne de CA tarafından ihraç edilmiş'
+      reason: 'OCSP yanıtlayanı ne CA\'nın kendisi ne de CA tarafından ' +
+        'imzalanmış bir delege (RFC 6960 §4.2.2.2)'
     };
   }
 

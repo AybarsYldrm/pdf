@@ -24,6 +24,11 @@ const {
 } = require('@fitfak/pades/src/utils/pdf_parser');
 const ext = require('@fitfak/pades/src/cades/x509_ext');
 const cms = require('./src/cms');
+const { validatePath } = require('./src/path');
+const { assessAlgorithms } = require('./src/algorithms');
+const {
+  analyzeIncrementalChanges, validateByteRange, readDocMdp
+} = require('./src/revision');
 const { parseCrl, checkCrl } = require('@fitfak/pades/src/cades/crl');
 
 class VerifyError extends Error {
@@ -33,6 +38,9 @@ class VerifyError extends Error {
     this.code = code;
   }
 }
+
+/** id-kp-timeStamping — RFC 3161 §2.3, TSA sertifikasında ZORUNLU. */
+const OID_TIME_STAMPING = '1.3.6.1.5.5.7.3.8';
 
 /** ETSI TS 119 102-1 ana göstergeleri */
 const INDICATION = {
@@ -105,22 +113,67 @@ async function verifyPdf(pdfBuffer, opts = {}) {
 
   // Son imzadan sonra bayt olması tek başına "belge değiştirildi" demek DEĞİLDİR:
   // LTV/arşiv verisi (DSS/VRI) imzadan SONRA eklenir ve buna izin verilir.
-  // Sadece izin verilmeyen bir değişiklik varsa bayrak kalkar.
-  const tail = report.documentIntegrity.unsignedBytes > 0
-    ? pdfBuffer.slice(maxCovered).toString('latin1')
-    : '';
-  const tailIsOnlyValidationData = tail.length === 0 ||
-    (/\/DSS\b|\/VRI\b/.test(tail) && !/\/Type\s*\/Page\b/.test(tail));
+  //
+  // Bunun METİN ARAMASIYLA belirlenmesi bir atlatmaydı: eklenen bölümde
+  // `/DSS` geçiyor ve `/Type /Page` geçmiyorsa "yalnız doğrulama verisi"
+  // sayılıyordu. Saldırgan trailer'a bir `/DSS << /Certs [] >>` yazıp sayfanın
+  // içerik akışını yeniden tanımladığında bayrak sönüyordu. Artık iki sürüm de
+  // AÇILIP karşılaştırılıyor (bkz. src/revision.js).
+  const revisionDiff = analyzeIncrementalChanges(pdfBuffer, maxCovered);
 
-  report.documentIntegrity.trailingRevisionIsValidationData = tailIsOnlyValidationData;
+  const tailIsValidationData = report.documentIntegrity.unsignedBytes === 0 ||
+    (revisionDiff.contentChanged === false && revisionDiff.appendedIsStructured !== false);
+
+  report.documentIntegrity.trailingRevisionIsValidationData = tailIsValidationData;
   report.documentIntegrity.modifiedAfterSigning =
-    report.documentIntegrity.unsignedBytes > 0 && !tailIsOnlyValidationData;
+    revisionDiff.contentChanged === null ? null : !tailIsValidationData;
+  report.documentIntegrity.changes = revisionDiff.changes;
+  if (revisionDiff.errors.length) {
+    report.warnings.push(...revisionDiff.errors);
+  }
+
+  // Bir belgede kaç imza olabileceğinin ÜST SINIRI vardır.
+  //
+  // Her imza kendi zincirini kurar, kendi iptal kanıtını arar ve kapsamı
+  // farklıysa belgeyi yeniden açtırır. Binlerce imza taşıyan bir belge,
+  // doğrulayanın işlemcisini tüketmek için yeterlidir. Sınır aşılırsa
+  // doğrulama YAPILMAZ ve bu açıkça bildirilir — sessizce ilk N tanesini
+  // doğrulamak, kalanların durumunu bilinmiyorken bilinir göstermek olurdu.
+  const maxSignatures = Number.isInteger(opts.maxSignatures) && opts.maxSignatures > 0
+    ? opts.maxSignatures : 128;
+  if (signatures.length > maxSignatures) {
+    report.warnings.push(
+      `Belgede ${signatures.length} imza alanı var (sınır ${maxSignatures}); ` +
+      'doğrulama yapılmadı. Sınırı yükseltmek için maxSignatures verin.');
+    return report;
+  }
+
+  // Aynı kapsam için karşılaştırmayı BİR KEZ yap. İki farklı imza aynı
+  // baytlara kadar uzanıyorsa sonuç da aynıdır; belgeyi imza başına
+  // yeniden açmak yalnız iş üretir.
+  const diffCache = new Map([[maxCovered, revisionDiff]]);
+  const diffFor = (covered) => {
+    if (!diffCache.has(covered)) {
+      diffCache.set(covered, analyzeIncrementalChanges(pdfBuffer, covered));
+    }
+    return diffCache.get(covered);
+  };
 
   for (const sig of signatures) {
     report.signatures.push(
       await verifyOneSignature(sig, {
         pdfBuffer, dss, trustAnchors, validationTime, useEmbedded,
         allowNetwork: !!opts.allowNetwork, revisions,
+        allowPrivateNetwork: opts.allowPrivateNetwork === true,
+        algorithmPolicy: opts.algorithmPolicy,
+        // İptal kanıtı EKSİKSE ne olsun? Varsayılan: uyarı (çevrimdışı B-B
+        // doğrulaması meşru bir kullanımdır). `true` ise INDETERMINATE.
+        requireRevocation: opts.requireRevocation === true,
+        allowHosts: opts.allowHosts,
+        denyHosts: opts.denyHosts,
+        // Kapsam başına önbelleklenmiş karşılaştırma.
+        revisionDiff: sig.byteRange && sig.byteRange.length >= 4
+          ? diffFor(sig.byteRange[2] + sig.byteRange[3]) : null,
         ignoreTimestampPoe: !!opts.ignoreTimestampPoe,
         // Seviye belirlemesi metin aramasıyla DEĞİL, ayrıştırılmış imza
         // alanlarıyla yapılır (bkz. determineLevel)
@@ -167,14 +220,29 @@ async function verifyOneSignature(sig, ctx) {
     entry.errors.push('/ByteRange okunamadı');
     return entry;
   }
-  const [s1, l1, s2, l2] = sig.byteRange;
+  const [, , s2, l2] = sig.byteRange;
   const covered = s2 + l2;
   entry.coverage = {
     byteRange: sig.byteRange,
     coveredBytes: covered,
     documentBytes: ctx.pdfBuffer.length,
-    coversWholeDocument: covered >= ctx.pdfBuffer.length
+    coversWholeDocument: covered >= ctx.pdfBuffer.length,
+    modifiedAfterSigning: null,
+    changes: []
   };
+
+  // /ByteRange'in YAPISI de doğrulanmalı. Dört sayının okunabilmesi onların
+  // anlamlı olduğunu göstermez: dosyanın başını dışarıda bırakan ya da
+  // boşluğu /Contents'ten geniş tutan bir ByteRange, imzasız içeriği imzalı
+  // gibi gösterir.
+  const brCheck = validateByteRange(sig, ctx.pdfBuffer.length);
+  if (!brCheck.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'FORMAT_FAILURE';
+    entry.errors.push(...brCheck.errors);
+    return entry;
+  }
+
   if (!entry.coverage.coversWholeDocument) {
     entry.warnings.push(
       `Bu imza belgenin ilk ${covered} baytını kapsıyor; ` +
@@ -230,6 +298,7 @@ async function verifyOneSignature(sig, ctx) {
   // ── 4. CMS doğrulaması ──
   const cmsResult = cms.verifySignerInfo(signerInfo, signerCert, contentDigest);
   entry.cms = {
+    signedAttrsPresent: cmsResult.signedAttrsPresent,
     signatureValid: cmsResult.signatureValid,
     messageDigestMatches: cmsResult.messageDigestMatches,
     contentTypeValid: cmsResult.contentTypeValid,
@@ -249,12 +318,49 @@ async function verifyOneSignature(sig, ctx) {
     return entry;
   }
 
+  // ── 4b. ZORUNLU imzalı öznitelikler karar verir ──
+  //
+  // Bu blok olmadan yukarıdaki hatalar yalnız `entry.errors`'a yazılıyor,
+  // göstergeyi hiç etkilemiyordu: content-type'ı yanlış, imzalayan sertifikaya
+  // hiç bağlanmamış bir CMS TOTAL-PASSED dönüyordu. Rapordaki hata listesini
+  // kimse okumaz; kullanıcı yeşil tiki görür.
+  if (!cmsResult.signedAttrsPresent) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (cmsResult.contentTypeValid === false) {
+    // RFC 5652 §11.1: content-type ZORUNLUDUR ve eContentType ile eşleşmelidir.
+    // Eşleşmezse imza, imzalayanın onayladığından BAŞKA bir bağlama aittir —
+    // bir zaman damgası jetonunun belge imzası yerine geçirilmesi gibi.
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (cmsResult.signingCertificateValid === false && cmsResult.signingCertificatePresent) {
+    // Öznitelik VAR ama başka bir sertifikayı gösteriyor: aktif bir sertifika
+    // değiştirme girişimi. Bu kesin bir başarısızlıktır.
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    return entry;
+  }
+  if (!cmsResult.signingCertificatePresent) {
+    // Öznitelik hiç yok. PAdES bunu ZORUNLU kılar; eski Adobe profillerinde
+    // (adbe.pkcs7.*) isteğe bağlıydı. İkisini aynı kefeye koymamak gerekir:
+    // biri standart ihlali, diğeri eksik kanıt.
+    const isPades = typeof sig.subFilter === 'string' && sig.subFilter.startsWith('ETSI.');
+    entry.indication = isPades ? INDICATION.FAILED : INDICATION.INDETERMINATE;
+    entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+    if (isPades) return entry;
+  }
+
   // ── 5. Zincir ──
-  const chain = ext.buildChain(signerCert, dedupe([...pool, ...ctx.trustAnchors]));
+  const chain = ext.buildChain(signerCert, dedupe([...pool, ...ctx.trustAnchors]),
+    { anchors: ctx.trustAnchors });
   entry.chain = chain.path.map(describeCert);
 
   const anchor = chain.path[chain.path.length - 1];
-  const trusted = ctx.trustAnchors.some((ta) => ta.equals(anchor)) || isSelfSignedIn(anchor, ctx.trustAnchors);
+  const trusted = isTrustAnchor(anchor, ctx.trustAnchors);
   entry.chain.trusted = trusted;
 
   if (!chain.complete) {
@@ -275,6 +381,43 @@ async function verifyOneSignature(sig, ctx) {
       entry.errors.push(`Zincir imzası geçersiz: ${describeCert(chain.path[i]).cn}`);
       return entry;
     }
+  }
+
+  // ── 5b. RFC 5280 §6.1 yol kısıtları ──
+  // İmzaların doğrulanması yolu GEÇERLİ yapmaz: imzalayanın imzalamaya
+  // YETKİLİ olup olmadığı ayrı bir sorudur. Bu blok olmadan, güvenilen bir
+  // CA'dan alınmış sıradan bir son varlık sertifikası kendine "Genel Müdür"
+  // sertifikası üretip belge imzalayabiliyordu.
+  const pathCheck = validatePath(chain.path);
+  entry.warnings.push(...pathCheck.warnings);
+  if (!pathCheck.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(...pathCheck.errors);
+    return entry;
+  }
+
+  // ── 5c. Algoritma politikası ──
+  //
+  // İmzanın MATEMATİKSEL olarak doğrulanması güvenilir olduğu anlamına
+  // gelmez. SHA-1 çakışma direncini kaybetti; 1024 bitlik RSA bugün
+  // kırılabilir sayılıyor. Bu blok olmadan böyle bir imza sessizce
+  // TOTAL-PASSED dönüyordu.
+  const algo = assessAlgorithms({
+    signerCert,
+    digestAlgorithm: hashName,
+    signatureAlgorithm: signerInfo.signatureAlgorithm,
+    chain: chain.path
+  }, ctx.algorithmPolicy);
+  entry.algorithms = algo.details;
+  entry.warnings.push(...algo.warnings);
+  if (!algo.ok) {
+    // ETSI TS 119 102-1: kriptografik kısıt ihlali, POE yoksa INDETERMINATE
+    // verir. İmza matematiksel olarak doğrulandı; güvenilmez olan algoritma.
+    entry.indication = INDICATION.INDETERMINATE;
+    entry.subIndication = 'CRYPTO_CONSTRAINTS_FAILURE_NO_POE';
+    entry.errors.push(...algo.errors);
+    return entry;
   }
 
   // ── 6. Zaman damgaları ──
@@ -326,25 +469,128 @@ async function verifyOneSignature(sig, ctx) {
   entry.revocation = await checkRevocation(chain.path, sig.vriKeys, ctx, checkTime);
   const revoked = entry.revocation.find((r) => r.status === 'revoked');
   if (revoked) {
-    entry.indication = INDICATION.FAILED;
-    entry.subIndication = poeTime ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE';
-    entry.errors.push(`İptal edilmiş sertifika: ${revoked.subject}`);
-    return entry;
+    // ALT GÖSTERGE İKİ AYRI EKSENE BAKAR ve eskiden bunlar karışmıştı:
+    // `poeTime ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE'` yazılıydı, yani
+    // POE'nin VARLIĞI "iptal edilen bir CA'ydı" anlamına geliyordu. İki
+    // eksen birbiriyle ilgisiz:
+    //   • iptal edilen sertifika YAPRAK mı yoksa CA mı?
+    //   • imzanın iptalden ÖNCE var olduğuna dair kanıt (POE) var mı?
+    const oncedenVardi = poeAntedatesRevocation(poeTime, revoked);
+
+    if (oncedenVardi) {
+      // ETSI TS 119 102-1: imza iptalden önce vardı ve iptal sebebi anahtar
+      // ele geçirilmesi değil. İmza geçerli sayılır; durum yine bildirilir.
+      entry.warnings.push(
+        `${revoked.subject}: sertifika ${revoked.revocationTime} tarihinde ` +
+        `iptal edilmiş, ama imza ${poeTime.toISOString()} itibarıyla vardı ` +
+        `(sebep: ${revoked.reason || 'belirtilmemiş'})`);
+    } else {
+      entry.indication = INDICATION.FAILED;
+      entry.subIndication = revoked.isCa ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE';
+      entry.errors.push(`İptal edilmiş sertifika: ${revoked.subject}` +
+        (revoked.revocationTime ? ` (${revoked.revocationTime})` : '') +
+        (revoked.reason ? ` — ${revoked.reason}` : ''));
+      return entry;
+    }
   }
 
+  // İptal kanıtının EKSİKLİĞİ de bir sonuçtur.
+  //
+  // "Kanıt yok" ile "iptal edilmemiş" aynı şey değildir: çalınmış bir
+  // anahtarın sertifikası iptal edilmiş olabilir ve doğrulayıcı bunu
+  // göremiyordur. Varsayılan davranış bunu UYARI olarak bildirir (çevrimdışı
+  // B-B doğrulaması meşru bir kullanımdır); `requireRevocation: true` verilirse
+  // kanıt eksikliği kesin bir belirsizliğe dönüşür (ETSI: TRY_LATER).
   const nonRootCount = chain.path.filter((c) => !ext.isSelfSigned(c)).length;
   const covereds = entry.revocation.filter((r) => r.status === 'good').length;
+  entry.revocationComplete = !chain.complete ? null : covereds >= nonRootCount;
+
   if (chain.complete && covereds < nonRootCount) {
-    entry.warnings.push(
-      `Yoldaki ${nonRootCount} sertifikadan ${covereds} tanesi için iptal kanıtı var`);
+    const eksik = entry.revocation
+      .filter((r) => r.status !== 'good' && r.status !== 'revoked')
+      .map((r) => r.subject).filter(Boolean);
+    const mesaj = `Yoldaki ${nonRootCount} sertifikadan ${covereds} tanesi için ` +
+      `iptal kanıtı var${eksik.length ? ` — kanıtsız: ${eksik.join(', ')}` : ''}. ` +
+      '"Kanıt yok", "iptal edilmemiş" demek DEĞİLDİR.';
+
+    if (ctx.requireRevocation) {
+      entry.indication = INDICATION.INDETERMINATE;
+      entry.subIndication = 'TRY_LATER';
+      entry.errors.push(mesaj);
+      return entry;
+    }
+    entry.warnings.push(mesaj);
   }
 
-  // ── 9. Seviye ──
+  // ── 9. İmzadan sonraki değişiklikler ──
+  //
+  // Bu blok olmadan, imzalı bir belgeye artımlı güncelleme ekleyip sayfanın
+  // içerik akışını tamamen değiştirmek imzayı bozmuyordu: kriptografi doğru,
+  // gösterge TOTAL-PASSED. Kapsanan baytlar doğrulanmış olabilir; belge
+  // BUNDAN İBARET DEĞİLDİR.
+  if (!entry.coverage.coversWholeDocument) {
+    const diff = ctx.revisionDiff || analyzeIncrementalChanges(ctx.pdfBuffer, covered);
+    const docMdp = readDocMdp(ctx.pdfBuffer, sig);
+    entry.coverage.modifiedAfterSigning =
+      diff.contentChanged === null ? null
+        : (diff.contentChanged || diff.appendedIsStructured === false);
+    entry.coverage.changes = diff.changes;
+    entry.coverage.certification = docMdp.isCertification
+      ? { permissions: docMdp.permissions } : null;
+
+    if (diff.contentChanged === null) {
+      // Karar verilemedi. "Sorun görünmüyor" ile "sorun yok" aynı şey değildir.
+      entry.indication = INDICATION.INDETERMINATE;
+      entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+      entry.errors.push('İmza sonrası eklenen bölüm çözümlenemedi: ' +
+        (diff.errors.join('; ') || 'bilinmeyen sebep'));
+      return entry;
+    }
+
+    if (entry.coverage.modifiedAfterSigning) {
+      // İMZA SAĞLAM, BELGE AYNI DEĞİL.
+      //
+      // Kriptografi bozulmadı: `cms.signatureValid` true kalır ve imza
+      // KAPSADIĞI sürüm için geçerlidir. Ama okuyucunun gördüğü belge o sürüm
+      // değildir. Bunu TOTAL-PASSED saymak, imzayı imzalanmamış içeriğe kefil
+      // yapar; bu, PDF imzalarına yönelik en pratik saldırıdır ve saldırganın
+      // eklemesi ile meşru bir düzenleme birbirinden ayırt edilemez.
+      //
+      // DocMDP P=1 (hiçbir değişikliğe izin yok) varsa değişiklik imzalayanın
+      // açık beyanını ihlal eder: bu kesin bir başarısızlıktır.
+      const kesin = docMdp.isCertification && docMdp.permissions === 1;
+      entry.indication = kesin ? INDICATION.FAILED : INDICATION.INDETERMINATE;
+      entry.subIndication = 'DOC_MODIFIED_AFTER_SIGNING';
+      entry.errors.push(
+        (kesin
+          ? 'Sertifikasyon imzası hiçbir değişikliğe izin vermiyor (DocMDP P=1) ama '
+          : 'İmzalandıktan sonra belge değiştirilmiş — imza yalnız kapsadığı ' +
+            `ilk ${covered} baytı doğrular: `) +
+        (diff.changes.join('; ') || 'imza dışı bölüm değişmiş'));
+      return entry;
+    }
+
+    entry.warnings.push('İmzadan sonra eklenen bölüm belgenin görünen ' +
+      'içeriğini değiştirmiyor (doğrulama verisi ya da sonraki imza).');
+  } else {
+    entry.coverage.modifiedAfterSigning = false;
+  }
+
+  // ── 10. Seviye ──
   entry.achievedLevel = determineLevel(entry, sig, ctx);
 
-  if (entry.indication === INDICATION.INDETERMINATE && !entry.subIndication) {
-    entry.indication = INDICATION.PASSED;
-  } else if (!entry.errors.length && entry.subIndication === null) {
+  // ── 11. Nihai gösterge ──
+  //
+  // TEK YÜKSELTME KURALI: hiç hata yoksa ve bir alt gösterge konmadıysa imza
+  // geçer. Eski kodda ilk dal `entry.errors`'a hiç bakmıyordu; bir alt gösterge
+  // koymayan her hata sessizce yutuluyor ve imza TOTAL-PASSED oluyordu. Bir
+  // doğrulayıcıda "bilinmeyen bir sorun vardı ama geçti" diye bir durum olamaz.
+  if (entry.errors.length) {
+    if (entry.indication === INDICATION.PASSED) {
+      entry.indication = INDICATION.INDETERMINATE;
+    }
+    if (!entry.subIndication) entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+  } else if (entry.indication === INDICATION.INDETERMINATE && !entry.subIndication) {
     entry.indication = INDICATION.PASSED;
   }
 
@@ -462,10 +708,28 @@ function verifyDocTimeStamp(sig, entry, ctx) {
   // TSA zinciri
   const pool = [...parsed.certificates];
   if (ctx.dss) pool.push(...ctx.dss.certs);
-  const chain = ext.buildChain(tsaCert, dedupe([...pool, ...ctx.trustAnchors]));
+  const chain = ext.buildChain(tsaCert, dedupe([...pool, ...ctx.trustAnchors]),
+    { anchors: ctx.trustAnchors });
   entry.chain = chain.path.map(describeCert);
   const anchor = chain.path[chain.path.length - 1];
-  entry.chain.trusted = ctx.trustAnchors.some((ta) => ta.equals(anchor));
+  entry.chain.trusted = isTrustAnchor(anchor, ctx.trustAnchors);
+
+  for (let i = 0; i < chain.path.length - 1; i++) {
+    if (verifyCertSignature(chain.path[i], chain.path[i + 1])) continue;
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(`TSA zincir imzası geçersiz: ${describeCert(chain.path[i]).cn}`);
+    return entry;
+  }
+
+  const tsaPath = validatePath(chain.path, { requiredEku: [OID_TIME_STAMPING] });
+  entry.warnings.push(...tsaPath.warnings);
+  if (!tsaPath.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'CHAIN_CONSTRAINTS_FAILURE';
+    entry.errors.push(...tsaPath.errors);
+    return entry;
+  }
 
   entry.achievedLevel = 'doc-timestamp';
   entry.indication = INDICATION.PASSED;
@@ -575,6 +839,31 @@ function parseTstInfo(der) {
   return out;
 }
 
+/**
+ * POE, iptalden ÖNCEYE mi düşüyor?
+ *
+ * İmzanın iptalden önce var olduğu kanıtlanabiliyorsa, sonradan gelen bir
+ * iptal imzayı geçersiz kılmaz (ETSI TS 119 102-1). Bunun İKİ İSTİSNASI var
+ * ve ikisi de burada uygulanır:
+ *
+ *   • keyCompromise / cACompromise: anahtar ne zamandan beri başkasının
+ *     elinde olduğu bilinmez, bu yüzden POE koruma sağlamaz.
+ *   • invalidityDate uzantısı: CA "bu sertifika şu tarihten İTİBAREN
+ *     geçersizdi" diyorsa, kıyas iptal tarihine değil o tarihe yapılır.
+ */
+function poeAntedatesRevocation(poeTime, revoked) {
+  if (!poeTime || !revoked) return false;
+
+  const reason = String(revoked.reason || '').toLowerCase();
+  if (reason.includes('compromise')) return false;
+
+  const sinir = revoked.invalidityTime || revoked.revocationTime;
+  if (!sinir) return false;                    // zaman bilinmiyorsa koruma yok
+
+  const t = new Date(sinir);
+  return Number.isFinite(t.getTime()) && poeTime < t;
+}
+
 /** DSS'ten (çevrimdışı) ya da ağdan iptal durumunu belirler. */
 async function checkRevocation(path, vriKeys, ctx, checkTime) {
   const results = [];
@@ -612,6 +901,9 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
 
           const entry = {
             subject: info.cn, source: 'dss-crl', status: res.status,
+            isCa: i > 0,
+            revocationTime: res.revocationDate ? res.revocationDate.toISOString() : null,
+            invalidityTime: res.invalidityDate ? res.invalidityDate.toISOString() : null,
             reason: res.reason || null,
             thisUpdate: res.thisUpdate ? res.thisUpdate.toISOString() : null,
             nextUpdate: res.nextUpdate ? res.nextUpdate.toISOString() : null,
@@ -651,6 +943,9 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
       if (ocspHit) {
         found = {
           subject: info.cn, source: 'dss-ocsp', status: ocspHit.status,
+          isCa: i > 0,
+          revocationTime: ocspHit.revocationTime
+            ? new Date(ocspHit.revocationTime).toISOString() : null,
           producedAt: ocspHit.producedAt ? ocspHit.producedAt.toISOString() : null,
           thisUpdate: ocspHit.thisUpdate ? ocspHit.thisUpdate.toISOString() : null,
           nextUpdate: ocspHit.nextUpdate ? ocspHit.nextUpdate.toISOString() : null,
@@ -670,8 +965,17 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
     if (!found && ctx.allowNetwork) {
       try {
         const { collectForCertificate } = require('@fitfak/pades/src/cades/revocation');
-        const got = await collectForCertificate(cert, issuer, { validationTime: checkTime });
-        found = { subject: info.cn, source: got.ocspDer ? 'network-ocsp' : 'network-crl',
+        const got = await collectForCertificate(cert, issuer, {
+          validationTime: checkTime,
+          // Sertifikadan gelen AIA/CDP adresleri özel ağa çıkamaz — açıkça
+          // izin verilmedikçe. Bu adresleri imzalayan değil, sertifikayı
+          // üreten yazar (bkz. @fitfak/netguard).
+          allowPrivateNetwork: ctx.allowPrivateNetwork,
+          allowHosts: ctx.allowHosts,
+          denyHosts: ctx.denyHosts
+        });
+        found = { subject: info.cn, isCa: i > 0,
+                  source: got.ocspDer ? 'network-ocsp' : 'network-crl',
                   status: got.status };
       } catch (err) {
         found = { subject: info.cn, source: 'network', status: 'unknown', error: err.message };
@@ -835,14 +1139,39 @@ function verifyCertSignature(childDer, issuerDer) {
   }
 }
 
-function isSelfSignedIn(certDer, anchors) {
+/**
+ * Bu sertifika güven deposundaki bir çıpanın TA KENDİSİ mi?
+ *
+ * Burada tek geçerli ölçüt kimliktir: aynı DER, ya da (kodlama farklarına
+ * karşı) aynı açık anahtar + aynı Subject DN. Ad benzerliği ölçüt DEĞİLDİR.
+ *
+ * ESKİ DAVRANIŞ BİR ATLATMAYDI. Önceki `isSelfSignedIn()` adı yanıltıcıydı:
+ * hiçbir kendinden-imza kontrolü yapmıyor, yalnız Subject DN'leri
+ * karşılaştırıyordu. Saldırganın ürettiği, kurbanın kökü ile aynı DN'ye
+ * sahip ama tamamen farklı anahtarlı bir kök "güvenilir" sayılıyor ve
+ * belge TOTAL-PASSED dönüyordu. DN bir kimlik değil, bir etikettir; kimseyi
+ * kimseden ayırt etmez ve saldırgan tarafından serbestçe seçilir.
+ */
+function isTrustAnchor(certDer, anchors) {
   if (!certDer) return false;
+  if (anchors.some((ta) => ta.equals(certDer))) return true;
+
+  // Aynı sertifikanın farklı ama denk DER kodlaması: anahtar + isim eşleşmeli.
+  const spki = safe(() => publicKeyDer(certDer));
   const subject = safe(() => ext.getSubjectDer(certDer));
-  if (!subject) return false;
+  if (!spki || !subject) return false;
+
   return anchors.some((a) => {
-    const s = safe(() => ext.getSubjectDer(a));
-    return s && s.equals(subject);
+    const s = safe(() => publicKeyDer(a));
+    const n = safe(() => ext.getSubjectDer(a));
+    return s && n && s.equals(spki) && n.equals(subject);
   });
+}
+
+/** Sertifikanın SubjectPublicKeyInfo DER kodlaması. */
+function publicKeyDer(certDer) {
+  return new crypto.X509Certificate(certDer)
+    .publicKey.export({ type: 'spki', format: 'der' });
 }
 
 /** ETSI seviye tespiti. */
@@ -903,4 +1232,9 @@ function safe(fn) {
   try { return fn(); } catch { return null; }
 }
 
-module.exports = { verifyPdf, VerifyError, INDICATION, describeCert, readDss, findRevisions };
+module.exports = {
+  verifyPdf, VerifyError, INDICATION, describeCert, readDss, findRevisions,
+  // Test edilebilirlik: karar mantığının ağa ve PDF'e ihtiyacı olmadan
+  // sınanabilmesi gerekir.
+  poeAntedatesRevocation, isTrustAnchor
+};
