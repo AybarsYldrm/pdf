@@ -139,6 +139,9 @@ async function verifyPdf(pdfBuffer, opts = {}) {
         allowNetwork: !!opts.allowNetwork, revisions,
         allowPrivateNetwork: opts.allowPrivateNetwork === true,
         algorithmPolicy: opts.algorithmPolicy,
+        // İptal kanıtı EKSİKSE ne olsun? Varsayılan: uyarı (çevrimdışı B-B
+        // doğrulaması meşru bir kullanımdır). `true` ise INDETERMINATE.
+        requireRevocation: opts.requireRevocation === true,
         allowHosts: opts.allowHosts,
         denyHosts: opts.denyHosts,
         // En geniş kapsama göre yapılan karşılaştırma her imza için aynıdır;
@@ -440,17 +443,57 @@ async function verifyOneSignature(sig, ctx) {
   entry.revocation = await checkRevocation(chain.path, sig.vriKeys, ctx, checkTime);
   const revoked = entry.revocation.find((r) => r.status === 'revoked');
   if (revoked) {
-    entry.indication = INDICATION.FAILED;
-    entry.subIndication = poeTime ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE';
-    entry.errors.push(`İptal edilmiş sertifika: ${revoked.subject}`);
-    return entry;
+    // ALT GÖSTERGE İKİ AYRI EKSENE BAKAR ve eskiden bunlar karışmıştı:
+    // `poeTime ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE'` yazılıydı, yani
+    // POE'nin VARLIĞI "iptal edilen bir CA'ydı" anlamına geliyordu. İki
+    // eksen birbiriyle ilgisiz:
+    //   • iptal edilen sertifika YAPRAK mı yoksa CA mı?
+    //   • imzanın iptalden ÖNCE var olduğuna dair kanıt (POE) var mı?
+    const oncedenVardi = poeAntedatesRevocation(poeTime, revoked);
+
+    if (oncedenVardi) {
+      // ETSI TS 119 102-1: imza iptalden önce vardı ve iptal sebebi anahtar
+      // ele geçirilmesi değil. İmza geçerli sayılır; durum yine bildirilir.
+      entry.warnings.push(
+        `${revoked.subject}: sertifika ${revoked.revocationTime} tarihinde ` +
+        `iptal edilmiş, ama imza ${poeTime.toISOString()} itibarıyla vardı ` +
+        `(sebep: ${revoked.reason || 'belirtilmemiş'})`);
+    } else {
+      entry.indication = INDICATION.FAILED;
+      entry.subIndication = revoked.isCa ? 'REVOKED_CA_NO_POE' : 'REVOKED_NO_POE';
+      entry.errors.push(`İptal edilmiş sertifika: ${revoked.subject}` +
+        (revoked.revocationTime ? ` (${revoked.revocationTime})` : '') +
+        (revoked.reason ? ` — ${revoked.reason}` : ''));
+      return entry;
+    }
   }
 
+  // İptal kanıtının EKSİKLİĞİ de bir sonuçtur.
+  //
+  // "Kanıt yok" ile "iptal edilmemiş" aynı şey değildir: çalınmış bir
+  // anahtarın sertifikası iptal edilmiş olabilir ve doğrulayıcı bunu
+  // göremiyordur. Varsayılan davranış bunu UYARI olarak bildirir (çevrimdışı
+  // B-B doğrulaması meşru bir kullanımdır); `requireRevocation: true` verilirse
+  // kanıt eksikliği kesin bir belirsizliğe dönüşür (ETSI: TRY_LATER).
   const nonRootCount = chain.path.filter((c) => !ext.isSelfSigned(c)).length;
   const covereds = entry.revocation.filter((r) => r.status === 'good').length;
+  entry.revocationComplete = !chain.complete ? null : covereds >= nonRootCount;
+
   if (chain.complete && covereds < nonRootCount) {
-    entry.warnings.push(
-      `Yoldaki ${nonRootCount} sertifikadan ${covereds} tanesi için iptal kanıtı var`);
+    const eksik = entry.revocation
+      .filter((r) => r.status !== 'good' && r.status !== 'revoked')
+      .map((r) => r.subject).filter(Boolean);
+    const mesaj = `Yoldaki ${nonRootCount} sertifikadan ${covereds} tanesi için ` +
+      `iptal kanıtı var${eksik.length ? ` — kanıtsız: ${eksik.join(', ')}` : ''}. ` +
+      '"Kanıt yok", "iptal edilmemiş" demek DEĞİLDİR.';
+
+    if (ctx.requireRevocation) {
+      entry.indication = INDICATION.INDETERMINATE;
+      entry.subIndication = 'TRY_LATER';
+      entry.errors.push(mesaj);
+      return entry;
+    }
+    entry.warnings.push(mesaj);
   }
 
   // ── 9. İmzadan sonraki değişiklikler ──
@@ -770,6 +813,31 @@ function parseTstInfo(der) {
   return out;
 }
 
+/**
+ * POE, iptalden ÖNCEYE mi düşüyor?
+ *
+ * İmzanın iptalden önce var olduğu kanıtlanabiliyorsa, sonradan gelen bir
+ * iptal imzayı geçersiz kılmaz (ETSI TS 119 102-1). Bunun İKİ İSTİSNASI var
+ * ve ikisi de burada uygulanır:
+ *
+ *   • keyCompromise / cACompromise: anahtar ne zamandan beri başkasının
+ *     elinde olduğu bilinmez, bu yüzden POE koruma sağlamaz.
+ *   • invalidityDate uzantısı: CA "bu sertifika şu tarihten İTİBAREN
+ *     geçersizdi" diyorsa, kıyas iptal tarihine değil o tarihe yapılır.
+ */
+function poeAntedatesRevocation(poeTime, revoked) {
+  if (!poeTime || !revoked) return false;
+
+  const reason = String(revoked.reason || '').toLowerCase();
+  if (reason.includes('compromise')) return false;
+
+  const sinir = revoked.invalidityTime || revoked.revocationTime;
+  if (!sinir) return false;                    // zaman bilinmiyorsa koruma yok
+
+  const t = new Date(sinir);
+  return Number.isFinite(t.getTime()) && poeTime < t;
+}
+
 /** DSS'ten (çevrimdışı) ya da ağdan iptal durumunu belirler. */
 async function checkRevocation(path, vriKeys, ctx, checkTime) {
   const results = [];
@@ -807,6 +875,9 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
 
           const entry = {
             subject: info.cn, source: 'dss-crl', status: res.status,
+            isCa: i > 0,
+            revocationTime: res.revocationDate ? res.revocationDate.toISOString() : null,
+            invalidityTime: res.invalidityDate ? res.invalidityDate.toISOString() : null,
             reason: res.reason || null,
             thisUpdate: res.thisUpdate ? res.thisUpdate.toISOString() : null,
             nextUpdate: res.nextUpdate ? res.nextUpdate.toISOString() : null,
@@ -846,6 +917,9 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
       if (ocspHit) {
         found = {
           subject: info.cn, source: 'dss-ocsp', status: ocspHit.status,
+          isCa: i > 0,
+          revocationTime: ocspHit.revocationTime
+            ? new Date(ocspHit.revocationTime).toISOString() : null,
           producedAt: ocspHit.producedAt ? ocspHit.producedAt.toISOString() : null,
           thisUpdate: ocspHit.thisUpdate ? ocspHit.thisUpdate.toISOString() : null,
           nextUpdate: ocspHit.nextUpdate ? ocspHit.nextUpdate.toISOString() : null,
@@ -874,7 +948,8 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
           allowHosts: ctx.allowHosts,
           denyHosts: ctx.denyHosts
         });
-        found = { subject: info.cn, source: got.ocspDer ? 'network-ocsp' : 'network-crl',
+        found = { subject: info.cn, isCa: i > 0,
+                  source: got.ocspDer ? 'network-ocsp' : 'network-crl',
                   status: got.status };
       } catch (err) {
         found = { subject: info.cn, source: 'network', status: 'unknown', error: err.message };
@@ -1131,4 +1206,9 @@ function safe(fn) {
   try { return fn(); } catch { return null; }
 }
 
-module.exports = { verifyPdf, VerifyError, INDICATION, describeCert, readDss, findRevisions };
+module.exports = {
+  verifyPdf, VerifyError, INDICATION, describeCert, readDss, findRevisions,
+  // Test edilebilirlik: karar mantığının ağa ve PDF'e ihtiyacı olmadan
+  // sınanabilmesi gerekir.
+  poeAntedatesRevocation, isTrustAnchor
+};
