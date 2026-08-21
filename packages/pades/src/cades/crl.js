@@ -11,8 +11,7 @@
  */
 
 const crypto = require('crypto');
-const http = require('http');
-const https = require('https');
+const { pkiFetch } = require('@fitfak/netguard');
 const { URL } = require('url');
 
 const { readTLV, oidFromBytes, pemToDer } = require('./x509_extract');
@@ -75,45 +74,34 @@ function fetchCrl(url, opts = {}) {
   const timeoutMs = opts.timeoutMs || 15000;
   const maxBytes = opts.maxBytes || 8 * 1024 * 1024;
 
-  return new Promise((resolve, reject) => {
-    let u;
-    try { u = new URL(url); } catch {
-      return reject(new CrlError('ERR_CRL_BAD_URL', `Geçersiz CRL adresi: ${url}`));
+  // ADRES SALDIRGANDAN GELİR. CDP uzantısındaki URL'i imzalayan değil,
+  // sertifikayı üreten yazar. Şema kontrolü yetmez: `http://169.254.169.254/`
+  // da geçerli bir http adresidir. `pkiFetch` adı bir kez çözer, GÜVENLİ
+  // adrese bağlanır ve her yönlendirmeyi yeniden denetler.
+  return pkiFetch(url, {
+    timeoutMs,
+    maxBytes,
+    headers: {
+      Accept: 'application/pkix-crl, application/x-pkcs7-crl, */*',
+      ...(opts.headers || {})
+    },
+    allowHosts: opts.allowHosts,
+    denyHosts: opts.denyHosts,
+    lookup: opts.lookup,
+    allowPrivate: opts.allowPrivate === true || opts.allowPrivateNetwork === true
+  }).then((res) => {
+    if (res.status !== 200) {
+      throw new CrlError('ERR_CRL_HTTP', `CRL indirilemedi: HTTP ${res.status} (${url})`);
     }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-      return reject(new CrlError('ERR_CRL_UNSUPPORTED_SCHEME',
-        `Desteklenmeyen CRL şeması: ${u.protocol} (yalnız http/https)`));
-    }
-
-    const transport = u.protocol === 'https:' ? https : http;
-    const req = transport.get(u, {
-      timeout: timeoutMs,
-      headers: { Accept: 'application/pkix-crl, application/x-pkcs7-crl, */*', ...(opts.headers || {}) }
-    }, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new CrlError('ERR_CRL_HTTP', `CRL indirilemedi: HTTP ${res.statusCode} (${url})`));
-      }
-      const chunks = [];
-      let total = 0;
-      res.on('data', (c) => {
-        total += c.length;
-        if (total > maxBytes) {
-          req.destroy();
-          return reject(new CrlError('ERR_CRL_TOO_LARGE', `CRL boyut sınırını aştı (${maxBytes} bayt)`));
-        }
-        chunks.push(c);
-      });
-      res.on('end', () => {
-        const buf = Buffer.concat(chunks);
-        resolve(normalizeCrlBuffer(buf));
-      });
-    });
-    req.on('error', (err) => reject(new CrlError('ERR_CRL_NETWORK', `CRL isteği başarısız: ${err.message}`)));
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new CrlError('ERR_CRL_TIMEOUT', `CRL isteği zaman aşımına uğradı (${timeoutMs} ms)`));
-    });
+    return normalizeCrlBuffer(res.body);
+  }, (err) => {
+    if (err instanceof CrlError) throw err;
+    const code = err.code === 'ERR_NET_TIMEOUT' ? 'ERR_CRL_TIMEOUT'
+      : err.code === 'ERR_NET_TOO_LARGE' ? 'ERR_CRL_TOO_LARGE'
+      : err.code === 'ERR_NET_SCHEME' ? 'ERR_CRL_UNSUPPORTED_SCHEME'
+      : err.code === 'ERR_NET_BAD_URL' ? 'ERR_CRL_BAD_URL'
+      : 'ERR_CRL_NETWORK';
+    throw new CrlError(code, `CRL isteği başarısız: ${err.message}`);
   });
 }
 

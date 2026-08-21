@@ -1,8 +1,6 @@
 'use strict';
 const crypto = require('crypto');
-const http = require('http');
-const https = require('https');
-const { URL } = require('url');
+const { pkiFetch } = require('@fitfak/netguard');
 const { DER } = require('./asn1_der');
 const { readTLV, oidFromBytes, parseCertBasics } = require('./x509_extract');
 
@@ -60,38 +58,46 @@ function buildOCSPRequest(certDer, issuerCertDer, hashName = 'sha1') {
   return ocspRequest;
 }
 
-/** OCSP isteğini HTTP POST ile gönderir (application/ocsp-request), ham DER yanıtı döner. */
-function requestOCSP(ocspUrl, ocspReqDer, extraHeaders = {}) {
-  const u = new URL(ocspUrl);
-  const isHttps = u.protocol === 'https:';
-  const opts = {
-    hostname: u.hostname,
-    port: u.port || (isHttps ? 443 : 80),
-    path: u.pathname + (u.search || ''),
+/** OCSP yanıtı için üst sınır — bir "durum bildirimi" megabaytlarca olmaz. */
+const OCSP_MAX_BYTES = 1024 * 1024;
+const OCSP_TIMEOUT_MS = 15_000;
+
+/**
+ * OCSP isteğini HTTP POST ile gönderir (application/ocsp-request), ham DER
+ * yanıtı döner.
+ *
+ * ADRES SALDIRGANDAN GELİR: AIA uzantısındaki OCSP URL'ini imzalayan değil,
+ * sertifikayı üreten yazar. Eski sürüm bu adrese hiçbir denetim yapmadan
+ * istek atıyordu — ne şema kontrolü, ne özel ağ engeli, ne boyut sınırı, ne
+ * de ZAMAN AŞIMI vardı: yavaş yanıt veren bir uç doğrulamayı süresiz
+ * bekletebiliyordu.
+ *
+ * @param {string} ocspUrl
+ * @param {Buffer} ocspReqDer
+ * @param {Object} [extraHeaders]
+ * @param {Object} [netOpts] `pkiFetch` seçenekleri (timeoutMs, allowHosts…)
+ */
+async function requestOCSP(ocspUrl, ocspReqDer, extraHeaders = {}, netOpts = {}) {
+  const res = await pkiFetch(ocspUrl, {
     method: 'POST',
+    body: ocspReqDer,
+    timeoutMs: netOpts.timeoutMs || OCSP_TIMEOUT_MS,
+    maxBytes: netOpts.maxBytes || OCSP_MAX_BYTES,
     headers: {
       'Content-Type': 'application/ocsp-request',
-      'Content-Length': Buffer.byteLength(ocspReqDer),
-      'User-Agent': 'Node-OCSP-Client/1.0',
+      Accept: 'application/ocsp-response',
       ...extraHeaders
-    }
-  };
-  const agent = isHttps ? https : http;
-  return new Promise((resolve, reject) => {
-    const req = agent.request(opts, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`OCSP HTTP ${res.statusCode}`));
-        }
-        resolve(Buffer.concat(chunks));
-      });
-    });
-    req.on('error', reject);
-    req.write(ocspReqDer);
-    req.end();
+    },
+    allowHosts: netOpts.allowHosts,
+    denyHosts: netOpts.denyHosts,
+    lookup: netOpts.lookup,
+    allowPrivate: netOpts.allowPrivate === true || netOpts.allowPrivateNetwork === true
   });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`OCSP HTTP ${res.status}`);
+  }
+  return res.body;
 }
 
 const RESPONSE_STATUS_NAMES = ['successful', 'malformedRequest', 'internalError', 'tryLater', '(unused)', 'sigRequired', 'unauthorized'];
@@ -152,7 +158,7 @@ async function fetchOCSPForCert(certPem, issuerPem, ocspUrl, opts = {}) {
   const certDer = pemToDer(certPem);
   const issuerDer = pemToDer(issuerPem);
   const reqDer = buildOCSPRequest(certDer, issuerDer, opts.hashName || 'sha1');
-  const respDer = await requestOCSP(ocspUrl, reqDer, opts.headers || {});
+  const respDer = await requestOCSP(ocspUrl, reqDer, opts.headers || {}, opts);
   const parsed = parseOCSPResponse(respDer);
   if (!parsed.ok) {
     throw new Error('OCSP responder hata döndürdü: ' + parsed.responseStatus);

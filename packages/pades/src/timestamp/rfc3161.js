@@ -1,7 +1,6 @@
 'use strict';
 const crypto = require('crypto');
-const http = require('http');
-const https = require('https');
+const { pkiFetch } = require('@fitfak/netguard');
 const { URL } = require('url');
 const { DER } = require('../cades/asn1_der');
 const { OIDS } = require('../cades/oids');
@@ -61,42 +60,46 @@ function buildTSQ(
   return { der: DER.seq(...parts), nonce: nonceValue };
 }
 
-/** Yanıtı POST eder (DER ya da base64 olabilir), normalize eder */
-function requestTimestamp(tsaUrl, tsqDer, extraHeaders = {}) {
-  const u = new URL(tsaUrl);
-  const isHttps = u.protocol === 'https:';
-  const opts = {
-    hostname: u.hostname,
-    port: u.port || (isHttps ? 443 : 80),
-    path: u.pathname + (u.search || ''),
+/** Zaman damgası yanıtı için üst sınırlar. */
+const TSA_MAX_BYTES = 2 * 1024 * 1024;
+const TSA_TIMEOUT_MS = 20_000;
+
+/**
+ * Yanıtı POST eder (DER ya da base64 olabilir), normalize eder.
+ *
+ * TSA adresi OPERATÖR yapılandırmasından gelir, saldırganın verdiği belgeden
+ * değil. Bu yüzden özel ağ engeli VARSAYILAN OLARAK AÇIK DEĞİLDİR: kurum içi
+ * bir TSA (`http://tsa.sirket.local`) meşru bir kurulumdur. `allowPrivate`
+ * açıkça `false` verilerek daraltılabilir.
+ *
+ * Eksik olan başka bir şeydi: ZAMAN AŞIMI ve BOYUT SINIRI yoktu. Yavaş yanıt
+ * veren ya da sonsuz gövde gönderen bir uç, imzalama isteğini süresiz
+ * bekletebilir ya da belleği tüketebilirdi.
+ */
+async function requestTimestamp(tsaUrl, tsqDer, extraHeaders = {}, netOpts = {}) {
+  const res = await pkiFetch(tsaUrl, {
     method: 'POST',
+    body: tsqDer,
+    timeoutMs: netOpts.timeoutMs || TSA_TIMEOUT_MS,
+    maxBytes: netOpts.maxBytes || TSA_MAX_BYTES,
     headers: {
       'Content-Type': 'application/timestamp-query',
-      'Accept': 'application/timestamp-reply,application/pkcs7-mime,application/octet-stream,*/*',
-      'Content-Length': Buffer.byteLength(tsqDer),
-      'User-Agent': 'Node-PAdES/1.0',
+      Accept: 'application/timestamp-reply,application/pkcs7-mime,application/octet-stream,*/*',
       ...extraHeaders
-    }
-  };
-  const agent = isHttps ? https : http;
-
-  return new Promise((resolve, reject) => {
-    const req = agent.request(opts, res => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const body = Buffer.concat(chunks);
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`TSA HTTP ${res.statusCode}`));
-        }
-        const der = _maybeBase64ToDer(body);
-        resolve({ der, contentType: res.headers['content-type'] });
-      });
-    });
-    req.on('error', reject);
-    req.write(tsqDer);
-    req.end();
+    },
+    allowHosts: netOpts.allowHosts,
+    denyHosts: netOpts.denyHosts,
+    lookup: netOpts.lookup,
+    allowPrivate: netOpts.allowPrivate !== false
   });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`TSA HTTP ${res.status}`);
+  }
+  return {
+    der: _maybeBase64ToDer(res.body),
+    contentType: res.headers['content-type']
+  };
 }
 
 function _maybeBase64ToDer(buf) {

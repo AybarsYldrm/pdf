@@ -157,7 +157,7 @@ class AssetResolver {
       return { fetched: 0, failed: unique.length };
     }
 
-    const { fetchRemoteAsset } = require('./remote');
+    const { fetchRemoteAsset } = require('@fitfak/netguard');
     const budget = this.remoteOptions.maxRemote || 32;
     let fetched = 0;
     let failed = 0;

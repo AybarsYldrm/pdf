@@ -136,6 +136,9 @@ async function verifyPdf(pdfBuffer, opts = {}) {
       await verifyOneSignature(sig, {
         pdfBuffer, dss, trustAnchors, validationTime, useEmbedded,
         allowNetwork: !!opts.allowNetwork, revisions,
+        allowPrivateNetwork: opts.allowPrivateNetwork === true,
+        allowHosts: opts.allowHosts,
+        denyHosts: opts.denyHosts,
         // En geniş kapsama göre yapılan karşılaştırma her imza için aynıdır;
         // belgeyi imza başına yeniden açmak gereksiz iştir.
         revisionDiff: sig.byteRange && (sig.byteRange[2] + sig.byteRange[3]) === maxCovered
@@ -837,7 +840,15 @@ async function checkRevocation(path, vriKeys, ctx, checkTime) {
     if (!found && ctx.allowNetwork) {
       try {
         const { collectForCertificate } = require('@fitfak/pades/src/cades/revocation');
-        const got = await collectForCertificate(cert, issuer, { validationTime: checkTime });
+        const got = await collectForCertificate(cert, issuer, {
+          validationTime: checkTime,
+          // Sertifikadan gelen AIA/CDP adresleri özel ağa çıkamaz — açıkça
+          // izin verilmedikçe. Bu adresleri imzalayan değil, sertifikayı
+          // üreten yazar (bkz. @fitfak/netguard).
+          allowPrivateNetwork: ctx.allowPrivateNetwork,
+          allowHosts: ctx.allowHosts,
+          denyHosts: ctx.denyHosts
+        });
         found = { subject: info.cn, source: got.ocspDer ? 'network-ocsp' : 'network-crl',
                   status: got.status };
       } catch (err) {

@@ -1,8 +1,8 @@
 {
-  "name": "@fitfak/pdf-html",
-  "version": "1.0.0",
-  "description": "HTML + CSS → PDF derleyicisi; layout manifest ile imza yuvası koordinatları üretir.",
+  "name": "@fitfak/netguard",
   "main": "index.js",
+  "version": "1.0.0",
+  "description": "SSRF savunmalı adres denetimi ve HTTP getirici — tek karar noktası",
   "author": {
     "email": "network@fitfak.net",
     "name": "Aybars Yıldırım",
@@ -16,16 +16,11 @@
     "index.js",
     "src/"
   ],
-  "dependencies": {
-    "@fitfak/pdf": "^1.0.0",
-    "@fitfak/netguard": "^1.0.0"
-  },
   "keywords": [
-    "pdf",
-    "html",
-    "css",
-    "print",
-    "paged-media"
+    "ssrf",
+    "security",
+    "http",
+    "dns-rebinding"
   ],
   "publishConfig": {
     "access": "public"

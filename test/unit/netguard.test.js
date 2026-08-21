@@ -16,8 +16,8 @@ const http = require('http');
 
 const {
   inspectAddress, resolveSafeUrl, matchHost, NetGuardError
-} = require('@fitfak/pdf-html/src/assets/netguard');
-const { fetchRemoteAsset } = require('@fitfak/pdf-html/src/assets/remote');
+} = require('@fitfak/netguard');
+const { fetchRemoteAsset } = require('@fitfak/netguard');
 const { AssetResolver } = require('@fitfak/pdf-html/src/assets/resolver');
 
 const hasCode = (code) => (err) => err && err.code === code;

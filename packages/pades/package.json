@@ -31,7 +31,8 @@
   },
   "dependencies": {
     "@fitfak/ssl": "^2.1.0",
-    "@fitfak/pdf-doc": "^1.0.0"
+    "@fitfak/pdf-doc": "^1.0.0",
+    "@fitfak/netguard": "^1.0.0"
   },
   "optionalDependencies": {
     "@fitfak/stamp": "^1.0.0",

@@ -37,7 +37,8 @@ test.before(async () => {
   profile = svc.pki.profile('signer');
   manager = new PAdESManager({
     tsaUrl: svc.endpoints.tsa,
-    tsaOptions: { hashName: 'sha256', certReq: true }
+    tsaOptions: { hashName: 'sha256', certReq: true },
+    allowPrivateNetwork: true
   });
 });
 

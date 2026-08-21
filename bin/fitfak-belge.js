@@ -202,6 +202,7 @@ COMMANDS.sign = {
     ['--chain <dosya>', 'ara sertifika (birden çok kez)'],
     ['--level <B|T|LT|LTA>', 'PAdES seviyesi (varsayılan: T)'],
     ['--tsa <url>', 'RFC 3161 zaman damgası sunucusu'],
+    ['--allow-private-pki', 'sertifikadaki AIA/CDP adresleri iç ağa çıkabilsin (kurum içi PKI)'],
     ['--field <ad>', 'imza alanı adı'],
     ['--reason <metin>', 'imza gerekçesi'],
     ['--location <metin>', 'imza yeri'],
@@ -211,7 +212,7 @@ COMMANDS.sign = {
     ['--name <metin>', 'damgada görünecek ad'],
     ['--invisible', 'görünür damga ekleme']
   ],
-  flags: ['invisible'],
+  flags: ['invisible', 'allow-private-pki'],
   alias: { o: 'out' },
 
   async run(args) {
@@ -223,7 +224,10 @@ COMMANDS.sign = {
 
     const manager = new PAdESManager({
       tsaUrl: args.tsa || process.env.TSA_URL || 'http://timestamp.digicert.com',
-      tsaOptions: { hashName: 'sha256', certReq: true }
+      tsaOptions: { hashName: 'sha256', certReq: true },
+      // Sertifikadan gelen AIA/CDP/OCSP adresleri iç ağa çıkamaz. Kurum içi
+      // bir PKI kullanılıyorsa bilinçli olarak açılır.
+      allowPrivateNetwork: args['allow-private-pki'] === true
     });
 
     let visibleSignature = null;
@@ -270,7 +274,7 @@ COMMANDS.verify = {
     ['--at <tarih>', 'doğrulama zamanı (ISO 8601)'],
     ['--json', 'raporu JSON olarak yaz']
   ],
-  flags: ['offline', 'json'],
+  flags: ['offline', 'json', 'allow-private-pki'],
 
   async run(args) {
     const { verifyPdf } = require('@fitfak/verify');
@@ -279,6 +283,9 @@ COMMANDS.verify = {
     const report = await verifyPdf(read(args._[0]), {
       trustAnchors: anchors.length ? anchors : undefined,
       allowNetwork: !args.offline,
+      // Sertifikadan gelen AIA/CDP adresleri iç ağa çıkamaz; kurum içi bir
+      // PKI için `--allow-private-pki` ile bilinçli olarak açılır.
+      allowPrivateNetwork: args['allow-private-pki'] === true,
       validationTime: args.at ? new Date(args.at) : undefined
     });
 
@@ -336,15 +343,20 @@ COMMANDS.extend = {
     ['-o, --out <dosya>', 'çıktı PDF'],
     ['--to <LT|LTA>', 'hedef seviye (varsayılan: LT)'],
     ['--tsa <url>', 'RFC 3161 zaman damgası sunucusu'],
-    ['--prefer <yol>', 'ocsp-first | crl-first | both']
+    ['--prefer <yol>', 'ocsp-first | crl-first | both'],
+    ['--allow-private-pki', 'sertifikadaki AIA/CDP adresleri iç ağa çıkabilsin (kurum içi PKI)']
   ],
   alias: { o: 'out' },
+  flags: ['allow-private-pki'],
 
   async run(args) {
     const { PAdESManager } = require('@fitfak/pades/src/utils/pades_manager');
     const manager = new PAdESManager({
       tsaUrl: args.tsa || process.env.TSA_URL || 'http://timestamp.digicert.com',
-      tsaOptions: { hashName: 'sha256', certReq: true }
+      tsaOptions: { hashName: 'sha256', certReq: true },
+      // Sertifikadan gelen AIA/CDP/OCSP adresleri iç ağa çıkamaz. Kurum içi
+      // bir PKI kullanılıyorsa bilinçli olarak açılır.
+      allowPrivateNetwork: args['allow-private-pki'] === true
     });
 
     const target = String(args.to || 'LT').toUpperCase();

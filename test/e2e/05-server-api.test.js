@@ -48,6 +48,11 @@ test.before(async () => {
   // varsayılanın kapalı olduğu ayrıca sınanır.
   mod.CONFIG.allowServerSidePfx = true;
 
+  // Test PKI'ı 127.0.0.1'de çalışır: sertifikalardaki AIA/CDP adresleri
+  // loopback'i gösterir. Sunucu bu adreslere VARSAYILAN OLARAK çıkmaz
+  // (SSRF); LTV yollarını sınayabilmek için açıkça açılır.
+  mod.CONFIG.allowPrivateNetworkPki = true;
+
   server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
