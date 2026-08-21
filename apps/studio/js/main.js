@@ -30,7 +30,7 @@ const state = {
   verifyReport: null,
   editor: null,
   sceneEditor: null,
-  activeTab: 'design'
+  activeTab: 'scene'
 };
 
 const DEFAULT_HTML = `<article class="paper paper--kurumsal">
@@ -80,23 +80,92 @@ const DEFAULT_HTML = `<article class="paper paper--kurumsal">
 /* Bildirimler                                                          */
 /* ------------------------------------------------------------------ */
 
-function toast(message, kind = 'ok', title = null) {
-  const node = el('div', { class: `toast toast--${kind}`, role: 'status' }, [
+/**
+ * TEK bildirim sistemi.
+ *
+ * `key` verilirse aynı anahtarlı bildirim YENİLENİR, ikincisi eklenmez —
+ * "içe aktarılıyor → 4 sayfa çözümlendi" gibi ilerleyen işler ekranı
+ * doldurmasın. `kind: 'loading'` kendiliğinden kapanmaz; işi bitiren
+ * çağıran onu yeni bir durumla değiştirir ya da `dismissToast` ile kapatır.
+ *
+ * @param {string} message
+ * @param {'ok'|'info'|'warn'|'error'|'loading'} [kind]
+ * @param {string} [title]
+ * @param {{ key?: string, progress?: number }} [opts]
+ */
+const liveToasts = new Map();
+
+function toast(message, kind = 'ok', title = null, opts = {}) {
+  const body = [
     title ? el('div', { class: 'toast__title' }, title) : null,
-    el('div', {}, message)
-  ]);
-  $('#toasts').appendChild(node);
-  setTimeout(() => node.remove(), kind === 'error' ? 8000 : 4500);
+    el('div', { class: 'toast__body' }, message)
+  ];
+  if (typeof opts.progress === 'number') {
+    body.push(el('div', { class: 'toast__bar' }, [
+      el('i', { style: `width:${Math.max(0, Math.min(100, opts.progress))}%` })
+    ]));
+  }
+
+  const node = el('div', { class: `toast toast--${kind}`, role: 'status' }, body);
+
+  const key = opts.key || null;
+  if (key && liveToasts.has(key)) {
+    const prev = liveToasts.get(key);
+    clearTimeout(prev.timer);
+    prev.node.replaceWith(node);
+  } else {
+    $('#toasts').appendChild(node);
+  }
+
+  const ttl = kind === 'loading' ? 0 : (kind === 'error' ? 8000 : 4500);
+  const timer = ttl ? setTimeout(() => {
+    node.remove();
+    if (key) liveToasts.delete(key);
+  }, ttl) : null;
+
+  if (key) liveToasts.set(key, { node, timer });
+  return node;
+}
+
+/** Anahtarlı bir bildirimi kapatır (iş bitti ama söylenecek bir şey yok). */
+function dismissToast(key) {
+  const entry = liveToasts.get(key);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  entry.node.remove();
+  liveToasts.delete(key);
 }
 
 function status(text) { $('#canvasStatus').textContent = text; }
 
+/**
+ * Kullanıcıya ANLAŞILIR, geliştiriciye TAM hata.
+ *
+ * Ham `TypeError` ya da `ERR_ASSET_MISSING` gibi kodlar kullanıcıya bir şey
+ * anlatmaz. Arayüzde ne olduğu insan diliyle, tanı bilgisi (kod, yığın,
+ * bağlam) konsolda durur.
+ */
+const ERROR_MESSAGES = {
+  ERR_ASSET_MISSING: 'Belgedeki bir görselin verisi bulunamadı. Görseli yeniden ekleyin.',
+  ERR_ASSET_TOO_LARGE: 'Görsel dosyası çok büyük.',
+  ERR_ASSET_TYPE: 'Bu dosya türü desteklenmiyor (PNG, JPEG, TTF ya da OTF bekleniyordu).',
+  ERR_PDF_OPEN: 'PDF açılamadı. Dosya bozuk ya da parola korumalı olabilir.',
+  ERR_PDF_PASSWORD: 'Belge parolayla korunmuş; doğru parolayı girin.',
+  ERR_IMPORT: 'Belge içe aktarılamadı.',
+  ERR_SCENE_INVALID: 'Sahne dosyası geçersiz.',
+  ERR_TOO_LARGE: 'Dosya sunucunun kabul ettiği boyutu aşıyor.'
+};
+
 function handleError(err, context) {
-  const msg = err instanceof ApiError || err instanceof BrowserPkcs12Error
-    ? `${err.message}` : (err && err.message) || String(err);
-  toast(msg, 'error', context);
+  const code = err && err.code;
+  const known = code && ERROR_MESSAGES[code];
+  const raw = err instanceof ApiError || err instanceof BrowserPkcs12Error
+    ? err.message : (err && err.message) || String(err);
+
+  toast(known || raw, 'error', context);
   status('Hata');
-  console.error(context, err);
+  // Tanı konsolda KALIR: kod, bağlam ve yığın olmadan hata ayıklanamaz.
+  console.error(`[${context}]`, code || '(kodsuz)', err);
 }
 
 /* ------------------------------------------------------------------ */
@@ -617,7 +686,13 @@ function switchTab(name) {
   $('#canvasScroll').classList.toggle('is-hidden', scene);
   $('.canvas__toolbar').classList.toggle('is-hidden', scene);
 
-  if (scene) ensureSceneEditor().catch((err) => handleError(err, 'Editör yüklenemedi'));
+  if (scene) {
+    ensureSceneEditor()
+      // Tuval ölçüsü ancak GÖRÜNÜR olduğunda bilinir; sekme açılışında
+      // sığdırmak, kullanıcının ilk gördüğü şeyin tam sayfa olmasını sağlar.
+      .then((editor) => { if (!editor.lastPdf && !editor.dirty) editor.fitPage(); })
+      .catch((err) => handleError(err, 'Editör yüklenemedi'));
+  }
 }
 
 /**
@@ -637,6 +712,8 @@ async function ensureSceneEditor() {
     isActive: () => state.activeTab === 'scene',
     onStatus: (message) => status(message)
   });
+
+  editor.onAnalysis = (analysis) => renderAnalysis(analysis);
 
   await editor.init();
   state.sceneEditor = editor;
@@ -695,58 +772,309 @@ function bindSceneControls(editor) {
   });
 
   $('#btnSceneExport').addEventListener('click', () => {
-    const json = JSON.stringify(editor.scene.toJSON(), null, 2);
+    // Varlık BAYTLARI da yazılır. Yalnız üst veriyi kaydetmek, dosyayı
+    // yeniden açan kullanıcıya boş çerçeveler göstermek demekti: sahne
+    // dosyası kendi kendine yeter olmalıdır.
+    const doc = editor.scene.toJSON();
+    doc.assetBytes = editor.exportAssets();
+    const json = JSON.stringify(doc, null, 2);
     downloadBytes(new TextEncoder().encode(json), 'application/json',
       (editor.scene.doc.meta.title || 'sahne') + '.json');
   });
 
   $('#sceneImportJson').addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    try {
-      editor.loadScene(JSON.parse(await file.text()));
-      toast('Sahne yüklendi.', 'ok');
-    } catch (err) {
-      handleError(err, 'Sahne dosyası okunamadı');
-    } finally {
-      e.target.value = '';
-    }
+    e.target.value = '';
+    if (file) await importIntoScene(editor, file);
   });
 
   $('#sceneImportPdf').addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    try {
-      status('PDF içe aktarılıyor…');
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const result = await api.sceneImportPdf(bytes);
-      editor.loadScene(result.scene, result.assets || []);
-      for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
-      status('İçe aktarıldı');
-    } catch (err) {
-      handleError(err, 'PDF içe aktarılamadı');
-    } finally {
-      e.target.value = '';
-    }
+    e.target.value = '';
+    if (file) await importIntoScene(editor, file);
   });
 
   $('#btnSceneFromHtml').addEventListener('click', async () => {
+    const key = 'import-html';
     try {
       status('HTML içe aktarılıyor…');
+      toast('HTML sahneye çevriliyor…', 'loading', 'İçe aktarma', { key });
       const result = await api.sceneImportHtml({
         html: withSubstitutions($('#htmlSource').value),
         theme: $('#themeSelect').value
       });
       editor.loadScene(result.scene, result.assets || []);
-      for (const w of result.warnings || []) toast(w.message, 'warn', w.code);
+      reportImport(result, key, 'HTML');
+      switchTab('scene');
       status('İçe aktarıldı');
     } catch (err) {
+      dismissToast(key);
       handleError(err, 'HTML içe aktarılamadı');
+    }
+  });
+
+  bindSceneDropZone(editor);
+  bindScenePageOps(editor);
+}
+
+/* ------------------------------------------------------------------ */
+/* İçe aktarma — TEK giriş                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Dosyayı türüne göre sahneye alır.
+ *
+ * Dosya seçici de sürükle-bırak da BURAYA gelir. İki ayrı yol tutmak, iki
+ * ayrı davranış demekti: birinde varlıklar yükleniyor, ötekinde
+ * yüklenmiyor gibi farklar tam olarak böyle doğar.
+ *
+ * @param {SceneEditor} editor
+ * @param {File} file
+ */
+async function importIntoScene(editor, file) {
+  const name = file.name || 'dosya';
+  const lower = name.toLowerCase();
+  const key = `import-${name}`;
+
+  const isPdf = file.type === 'application/pdf' || lower.endsWith('.pdf');
+  const isJson = file.type === 'application/json' || lower.endsWith('.json');
+  const isImage = /^image\/(png|jpeg)$/.test(file.type) ||
+                  /\.(png|jpe?g)$/.test(lower);
+
+  try {
+    if (isPdf) {
+      status('PDF içe aktarılıyor…');
+      toast(`${name} okunuyor…`, 'loading', 'İçe aktarma', { key });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await api.sceneImportPdf(bytes);
+      // Panel `editor.onAnalysis` üzerinden tazelenir; burada ikinci kez
+      // çizmek aynı DOM'u iki kez kurmak olurdu.
+      editor.loadScene(result.scene, result.assets || [], { analysis: result.analysis });
+      reportImport(result, key, name);
+      status('İçe aktarıldı');
+      return;
+    }
+
+    if (isJson) {
+      const parsed = JSON.parse(await file.text());
+      // Sahne dosyası varlıkları İÇİNDE taşıyabilir (dışa aktarımda
+      // gömüldüyse); taşımıyorsa yalnız üst veri gelir ve görseller
+      // eksik kalır — bu sessizce geçilmez.
+      editor.loadScene(parsed, parsed.assetBytes || []);
+      const missing = (parsed.assets || []).length && !(parsed.assetBytes || []).length;
+      toast(missing
+        ? 'Sahne yüklendi; varlık baytları dosyada yok, görselleri yeniden ekleyin.'
+        : 'Sahne yüklendi.', missing ? 'warn' : 'ok', null, { key });
+      status('Sahne yüklendi');
+      return;
+    }
+
+    if (isImage) {
+      await editor.addImageFile(file);
+      toast(`${name} sahneye eklendi.`, 'ok', null, { key });
+      return;
+    }
+
+    toast(`${name} desteklenmiyor. PDF, PNG/JPEG ya da sahne (.json) bırakın.`,
+      'warn', 'İçe aktarma', { key });
+  } catch (err) {
+    dismissToast(key);
+    handleError(err, `${name} içe aktarılamadı`);
+  }
+}
+
+/** İçe aktarma sonucunu tek bir bildirimde özetler. */
+function reportImport(result, key, label) {
+  const warnings = result.warnings || [];
+  const pages = (result.scene && result.scene.pages ? result.scene.pages.length : 0);
+  const serious = warnings.filter((w) => w.code !== 'WARN_IMPORT_FLATTENED');
+
+  toast(
+    `${label}: ${pages} sayfa aktarıldı` +
+    (serious.length ? ` · ${serious.length} not` : ''),
+    serious.length ? 'warn' : 'ok', 'İçe aktarma', { key });
+
+  // Uyarı yağmuru YOK: ayrıntı çözümleme panelinde ve konsolda durur.
+  if (warnings.length) console.info('[içe aktarma uyarıları]', warnings);
+}
+
+/* ------------------------------------------------------------------ */
+/* Sürükle-bırak                                                        */
+/* ------------------------------------------------------------------ */
+
+function bindSceneDropZone(editor) {
+  const shell = $('#sceneShell');
+  const overlay = $('#sceneDrop');
+  let depth = 0;
+
+  const show = (on) => overlay.classList.toggle('is-hidden', !on);
+
+  // `dragenter`/`dragleave` iç içe elemanlarda defalarca tetiklenir; sayaç
+  // tutmadan örtü sürükleme ortasında kaybolur.
+  shell.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth++;
+    show(true);
+  });
+  shell.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  shell.addEventListener('dragleave', () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) show(false);
+  });
+  shell.addEventListener('drop', async (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    show(false);
+    for (const file of [...e.dataTransfer.files].slice(0, 8)) {
+      await importIntoScene(editor, file);
     }
   });
 }
 
-/** Baytları dosya olarak indirir. */
+const hasFiles = (e) =>
+  !!e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+
+/* ------------------------------------------------------------------ */
+/* Sayfa işlemleri                                                      */
+/* ------------------------------------------------------------------ */
+
+const PAGE_PRESETS = {
+  A4: [595.28, 841.89], A3: [841.89, 1190.55], A5: [419.53, 595.28],
+  LETTER: [612, 792]
+};
+
+function bindScenePageOps(editor) {
+  const act = (label, fn) => () => {
+    if (!editor.scene) return;
+    try {
+      editor.scene.transaction(label, () => fn(editor.scene, editor.currentPage));
+      editor.refresh();
+    } catch (err) {
+      handleError(err, label);
+    }
+  };
+
+  $('#btnScenePageRotL').addEventListener('click',
+    act('Sayfayı çevir', (sc, page) => sc.rotatePage(page.id, -90)));
+  $('#btnScenePageRotR').addEventListener('click',
+    act('Sayfayı çevir', (sc, page) => sc.rotatePage(page.id, 90)));
+  $('#btnScenePageDup').addEventListener('click',
+    act('Sayfayı çoğalt', (sc, page) => sc.duplicatePage(page.id)));
+  $('#btnScenePageUp').addEventListener('click',
+    act('Sayfayı taşı', (sc, page) => sc.movePage(page.id, editor.canvas.pageIndex - 1)));
+  $('#btnScenePageDown').addEventListener('click',
+    act('Sayfayı taşı', (sc, page) => sc.movePage(page.id, editor.canvas.pageIndex + 1)));
+  $('#btnScenePageDel').addEventListener('click',
+    act('Sayfayı sil', (sc, page) => sc.removePage(page.id)));
+
+  $('#scenePageSize').addEventListener('change', (e) => {
+    const value = e.target.value;
+    act('Sayfa ölçüsü', (sc, page) => sc.setPageSize(page.id, parsePageSize(value)))();
+  });
+
+  // Seçili sayfa değişince ölçü kutusu onu göstermeli.
+  editor.onPageChange = (page) => {
+    const box = editor.canvas.pageBox;
+    $('#scenePageSize').value = page && page.width > 0
+      ? (matchPreset(box.width, box.height) || '') : '';
+  };
+}
+
+function parsePageSize(value) {
+  if (!value) return null;
+  const [name, orientation] = value.split(' ');
+  const size = PAGE_PRESETS[name.toUpperCase()];
+  if (!size) return null;
+  const [w, h] = orientation === 'landscape' ? [size[1], size[0]] : size;
+  return { width: w, height: h };
+}
+
+function matchPreset(width, height) {
+  for (const [name, [w, h]] of Object.entries(PAGE_PRESETS)) {
+    if (Math.abs(width - w) < 2 && Math.abs(height - h) < 2) return name;
+    if (Math.abs(width - h) < 2 && Math.abs(height - w) < 2) return `${name} landscape`;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Belge çözümlemesi paneli                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * İçe aktarılan belgenin envanterini gösterir.
+ *
+ * Amaç modal bombardımanı DEĞİL: kullanıcı ne kaybettiğini merak ettiğinde
+ * bakacağı tek yer. Düzenlenebilirlik durumu açıkça yazılır — form alanları
+ * ve açıklamalar sahneye çevrilmez, bunu saklamak yanıltıcı olurdu.
+ */
+function renderAnalysis(analysis) {
+  const root = clear($('#sceneAnalysis'));
+  if (!analysis) {
+    root.appendChild(el('p', { class: 'empty' },
+      'Bir PDF açtığınızda belgenin envanteri burada çıkar.'));
+    return;
+  }
+
+  const row = (label, value, cls) => el('div', { class: `docscan__row ${cls || ''}` }, [
+    el('span', { class: 'docscan__k', text: label }),
+    el('span', { class: 'docscan__v', text: String(value) })
+  ]);
+
+  root.appendChild(row('Sayfa',
+    analysis.truncated
+      ? `${analysis.importedPages} / ${analysis.pageCount} (kırpıldı)`
+      : analysis.pageCount));
+  root.appendChild(row('Ölçü', analysis.sizes.join(' · ')));
+  if (analysis.rotated) root.appendChild(row('Dönme', 'var (uygulandı)'));
+
+  const o = analysis.objects || {};
+  root.appendChild(row('Metin', `${o.text || 0} nesne`));
+  root.appendChild(row('Görsel', `${o.image || 0} nesne`));
+  root.appendChild(row('Vektör', `${o.path || 0} nesne`));
+
+  if (analysis.form && analysis.form.fieldCount) {
+    root.appendChild(row('Form alanı',
+      `${analysis.form.fieldCount} · sahneye aktarılmadı`, 'is-warn'));
+  }
+  if (analysis.signatures && analysis.signatures.fieldCount) {
+    root.appendChild(row('İmza alanı',
+      `${analysis.signatures.fieldCount}` +
+      (analysis.signatures.signed ? ' · belge imzalı' : ''), 'is-warn'));
+  }
+  if (analysis.annotations && analysis.annotations.total) {
+    root.appendChild(row('Açıklama',
+      `${analysis.annotations.total} · sahneye aktarılmadı`, 'is-warn'));
+  }
+  if (analysis.encrypted) root.appendChild(row('Şifreleme', 'var', 'is-warn'));
+  if (analysis.claimedProfile) {
+    root.appendChild(row('Profil (iddia)', analysis.claimedProfile.label));
+  }
+
+  const notes = (analysis.warnings || []).filter((w) => w.code !== 'WARN_IMPORT_FLATTENED');
+  if (notes.length) {
+    root.appendChild(el('details', { class: 'docscan__notes' }, [
+      el('summary', { text: `${notes.length} not` }),
+      el('ul', {}, notes.map((w) => el('li', {}, [
+        el('code', { text: w.code }), ' ', w.message
+      ])))
+    ]));
+  }
+
+  if (analysis.signatures && analysis.signatures.signed) {
+    root.appendChild(el('p', { class: 'hint' },
+      'Bu belge imzalı. Sahne YENİ bir belge üretir ve eski imzaları taşımaz; ' +
+      'imzayı korumak için "Artımlı düzenle" sekmesini kullanın.'));
+  }
+}
+
+/** Baytları dosya olarak indirir. *//** Baytları dosya olarak indirir. */
 function downloadBytes(bytes, mime, filename) {
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
   const a = el('a', { href: url, download: filename });
@@ -878,6 +1206,22 @@ async function init() {
   });
 
   refreshStampPreview();
+
+  /**
+   * TANI YÜZEYİ.
+   *
+   * Hata ayıklama ve uçtan uca otomasyon için uygulama durumuna tek bir
+   * tutamak. Konsolda `fitfakStudio.sceneEditor.scene` demek, DOM'u kazımaya
+   * çalışmaktan hem kolay hem de doğrudur. Sayfada üçüncü taraf betik
+   * çalışmaz (önizleme iframe'i `allow-scripts` almaz), bu yüzden bu tutamak
+   * yeni bir saldırı yüzeyi açmaz.
+   */
+  window.fitfakStudio = state;
+
+  // BAŞLANGIÇTAKİ çalışma alanını gerçekten aç.
+  // HTML'de "Studio" sekmesi etkin görünüyor ama editör yalnız `switchTab`
+  // içinde kuruluyordu; açılışta çağırmadan tuval boş kalırdı.
+  switchTab(state.activeTab);
   status('Hazır');
 }
 

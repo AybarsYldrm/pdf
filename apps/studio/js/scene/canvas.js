@@ -50,6 +50,8 @@ export class SceneCanvas {
     this.onSelectionChange = () => {};
     this.onChange = () => {};
     this.onDoubleClick = () => {};
+    /** Sayfa değişti (tuval kendi başına da değiştirebilir). */
+    this.onPageChange = () => {};
 
     this._drag = null;
     this._els = new Map();       // nodeId → DOM elemanı
@@ -96,10 +98,13 @@ export class SceneCanvas {
 
   setPage(index) {
     if (!this.scene) return;
-    this.pageIndex = Math.max(0, Math.min(this.scene.pages.length - 1, index));
+    const next = Math.max(0, Math.min(this.scene.pages.length - 1, index));
+    if (next === this.pageIndex) return;
+    this.pageIndex = next;
     this.scene.selection.clear();
     this.render();
     this.onSelectionChange();
+    this.onPageChange(this.page);
   }
 
   setZoom(zoom) {
@@ -114,9 +119,23 @@ export class SceneCanvas {
   /* Çizim                                                             */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * ÇALIŞILAN sayfanın ölçüsü.
+   *
+   * Belge ölçüsü (`scene.page`) bir VARSAYILANDIR; sayfa kendi ölçüsünü
+   * taşıyabilir. İçe aktarılan çok ölçülü belgelerde (araya giren yatay
+   * tablo) belge ölçüsüne bakmak, yatay sayfayı dikey kâğıtta göstermek
+   * demektir.
+   */
+  get pageBox() {
+    return this.scene
+      ? this.geometry.pageGeometry(this.scene.doc || this.scene, this.page)
+      : { width: 0, height: 0, margin: { top: 0, right: 0, bottom: 0, left: 0 } };
+  }
+
   render() {
     if (!this.scene) return;
-    const page = this.scene.page;
+    const page = this.pageBox;
 
     this.sheet.style.width = `${page.width * this.zoom}px`;
     this.sheet.style.height = `${page.height * this.zoom}px`;
@@ -681,7 +700,7 @@ export class SceneCanvas {
         // Dönme yapışmaya girer: görünen kenar, çerçevenin kenarı değildir.
         rotation: primary.rotation || 0
       };
-      const snapped = this.geometry.snap(target, others, this.scene.page, { threshold: 4 / this.zoom });
+      const snapped = this.geometry.snap(target, others, this.pageBox, { threshold: 4 / this.zoom });
       offsetX += snapped.x - target.x;
       offsetY += snapped.y - target.y;
       guides = snapped.guides;

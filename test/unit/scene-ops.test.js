@@ -188,3 +188,49 @@ test('günlük: sahne işlemlerden yeniden kurulabilir', () => {
   assert.deepStrictEqual(rebuilt.toJSON().pages, direct.toJSON().pages);
   assert.strictEqual(rebuilt.doc.meta.title, 'Kurulan');
 });
+
+test('setPageSize işlemi ağdan geçer ve karşı tarafta aynı kâğıdı kurar', () => {
+  const local = Scene.blank();
+  const peer = Scene.blank();
+
+  const log = [];
+  local.recordOps((op) => log.push(op));
+
+  local.transaction('ölçü', () =>
+    local.setPageSize(local.pages[0].id, { width: 841.89, height: 595.28 }));
+
+  assert.deepStrictEqual(log.map((o) => o.op), ['setPageSize']);
+  ops.applyOps(peer, log.map((o) => ({ ...o, pageId: peer.pages[0].id })));
+
+  assert.strictEqual(peer.pageGeometry(0).width, 841.89);
+  assert.strictEqual(peer.pageGeometry(0).height, 595.28);
+});
+
+test('sayfa çevirme ağdan geçerken ÖLÇÜ de gider', () => {
+  // Yalnız düğümleri göndermek, karşı tarafta dönmüş içeriği dönmemiş
+  // kâğıda basmak olurdu.
+  const local = Scene.blank({ margin: { top: 0, right: 0, bottom: 0, left: 0 } });
+  const peer = Scene.blank({ margin: { top: 0, right: 0, bottom: 0, left: 0 } });
+  const node = { id: 'r1', x: 40, y: 40, width: 200, height: 60 };
+  for (const s of [local, peer]) {
+    s.transaction('kur', () => s.addNode(Scene.createNode('rect', node)));
+  }
+
+  const log = [];
+  local.recordOps((op) => log.push(op));
+  local.transaction('çevir', () => local.rotatePage(local.pages[0].id, 90));
+
+  assert.deepStrictEqual(log.map((o) => o.op), ['setPageSize', 'replacePage']);
+  ops.applyOps(peer, log.map((o) => ({ ...o, pageId: peer.pages[0].id })));
+
+  assert.strictEqual(peer.pageGeometry(0).width, local.pageGeometry(0).width);
+  assert.deepStrictEqual(peer.pages[0].nodes[0].frame, local.pages[0].nodes[0].frame);
+  assert.strictEqual(peer.pages[0].nodes[0].rotation, 90);
+});
+
+test('setPageSize olmayan sayfayı REDDEDER', () => {
+  const s = Scene.blank();
+  assert.throws(
+    () => ops.applyOps(s, [{ op: 'setPageSize', pageId: 'yok', size: { width: 100, height: 100 } }]),
+    (err) => err.code === 'ERR_OP_MISSING');
+});

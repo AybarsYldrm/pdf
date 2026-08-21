@@ -17,9 +17,9 @@
   </div>
 
   <nav class="tabs" id="tabs" role="tablist" aria-label="Çalışma alanları">
-    <button class="tab is-active" role="tab" data-tab="design"  aria-selected="true">Tasarla</button>
-    <button class="tab" role="tab" data-tab="scene"  aria-selected="false">Serbest tasarım</button>
-    <button class="tab" role="tab" data-tab="edit"   aria-selected="false">Düzenle</button>
+    <button class="tab is-active" role="tab" data-tab="scene"  aria-selected="true">Studio</button>
+    <button class="tab" role="tab" data-tab="design"  aria-selected="false">HTML kaynak</button>
+    <button class="tab" role="tab" data-tab="edit"   aria-selected="false">Artımlı düzenle</button>
     <button class="tab" role="tab" data-tab="sign"   aria-selected="false">İmzala</button>
     <button class="tab" role="tab" data-tab="verify" aria-selected="false">Doğrula</button>
   </nav>
@@ -37,8 +37,8 @@
   <!-- ── SOL PANEL ─────────────────────────────────────────────── -->
   <aside class="panel panel--left" id="leftPanel">
 
-    <!-- Tasarla -->
-    <section class="pane" data-pane="design">
+    <!-- HTML kaynak -->
+    <section class="pane is-hidden" data-pane="design">
       <h2 class="pane__title">Belge</h2>
 
       <label class="field">
@@ -88,31 +88,58 @@
         PDF/UA erişilebilirlik (etiketli yapı ağacı) demektir.</p>
     </section>
 
-    <!-- Serbest tasarım (sahne editörü) -->
-    <section class="pane is-hidden" data-pane="scene">
+    <!-- PDF Studio (sahne editörü) -->
+    <section class="pane" data-pane="scene">
       <h2 class="pane__title">Belge</h2>
 
       <div class="pane__actions pane__actions--wrap">
-        <button class="btn btn--sm" id="btnSceneNew" type="button">Yeni</button>
-        <button class="btn btn--sm" id="btnSceneExport" type="button">JSON dışa aktar</button>
+        <button class="btn btn--sm btn--primary" id="btnSceneNew" type="button">Yeni</button>
+        <label class="btn btn--sm sc-tools__file" title="Var olan bir PDF'i düzenlenebilir hâle getirir">
+          PDF aç
+          <input id="sceneImportPdf" type="file" accept=".pdf,application/pdf" hidden>
+        </label>
         <label class="btn btn--sm sc-tools__file">
-          JSON içe aktar
+          Sahne aç
           <input id="sceneImportJson" type="file" accept=".json,application/json" hidden>
         </label>
+        <button class="btn btn--sm" id="btnSceneFromHtml" type="button"
+                title="HTML kaynak sekmesindeki belgeyi sahneye çevirir">HTML'den</button>
+        <button class="btn btn--sm" id="btnSceneExport" type="button">Sahneyi kaydet</button>
+      </div>
+      <p class="hint">Tuvale <strong>PDF, görsel ya da sahne dosyası bırakabilirsiniz</strong>.
+        İçe aktarma bir düzleştirmedir: metin kutuları artık akmaz, uzayan metin
+        sonrakini itmez.</p>
+
+      <h2 class="pane__title">Belge çözümlemesi</h2>
+      <div id="sceneAnalysis" class="docscan">
+        <p class="empty">Bir PDF açtığınızda belgenin envanteri burada çıkar.</p>
       </div>
 
-      <h2 class="pane__title">İçe aktar</h2>
-      <label class="field">
-        <span class="field__label">PDF'ten</span>
-        <input id="sceneImportPdf" class="input input--file" type="file" accept=".pdf">
-      </label>
-      <div class="pane__actions">
-        <button class="btn btn--sm" id="btnSceneFromHtml" type="button">
-          Tasarla sekmesindeki HTML'den
-        </button>
+      <h2 class="pane__title">Sayfa</h2>
+      <div class="pane__actions pane__actions--wrap" id="scenePageOps">
+        <button class="btn btn--sm" id="btnScenePageRotL" type="button" title="Sayfayı sola çevir">↺ 90°</button>
+        <button class="btn btn--sm" id="btnScenePageRotR" type="button" title="Sayfayı sağa çevir">↻ 90°</button>
+        <button class="btn btn--sm" id="btnScenePageDup" type="button">Çoğalt</button>
+        <button class="btn btn--sm" id="btnScenePageUp" type="button" title="Önceki sıraya al">↑</button>
+        <button class="btn btn--sm" id="btnScenePageDown" type="button" title="Sonraki sıraya al">↓</button>
+        <button class="btn btn--sm btn--danger" id="btnScenePageDel" type="button">Sil</button>
       </div>
-      <p class="hint">İçe aktarma bir <strong>düzleştirmedir</strong>: metin kutuları
-        artık akmaz, uzayan metin sonrakini itmez.</p>
+      <label class="field">
+        <span class="field__label">Sayfa ölçüsü</span>
+        <select id="scenePageSize" class="input">
+          <option value="">Belge ölçüsü</option>
+          <option value="A4">A4 dikey</option>
+          <option value="A4 landscape">A4 yatay</option>
+          <option value="A3">A3 dikey</option>
+          <option value="A3 landscape">A3 yatay</option>
+          <option value="A5">A5 dikey</option>
+          <option value="LETTER">Letter dikey</option>
+          <option value="LETTER landscape">Letter yatay</option>
+        </select>
+      </label>
+
+      <h2 class="pane__title">Özellikler</h2>
+      <div id="sceneInspector" class="sceneinsp"></div>
 
       <h2 class="pane__title">Çıktı</h2>
       <label class="field">
@@ -121,8 +148,6 @@
           <option value="">Yok (standart PDF)</option>
         </select>
       </label>
-      <p class="hint">PDF/UA seçilirse okuma sırası ve alternatif metinler
-        <strong>zorunlu</strong> olur; eksikler uyarı olarak bildirilir.</p>
       <div class="pane__actions pane__actions--wrap">
         <button class="btn btn--primary" id="btnSceneRender" type="button">PDF üret</button>
         <button class="btn" id="btnSceneDownload" type="button" disabled>İndir</button>
@@ -130,9 +155,6 @@
       </div>
       <p class="hint">Tuval bir <strong>önizlemedir</strong>; PDF sahnenin kendisinden,
         sunucuda derlenir. Sahnedeki koordinat PDF'teki koordinattır.</p>
-
-      <h2 class="pane__title">Özellikler</h2>
-      <div id="sceneInspector" class="sceneinsp"></div>
 
       <h2 class="pane__title">Kısayollar</h2>
       <dl class="kv kv--compact">
@@ -317,7 +339,7 @@
 
   <!-- ── TUVAL ─────────────────────────────────────────────────── -->
   <section class="canvas" id="canvasArea">
-    <div class="canvas__toolbar">
+    <div class="canvas__toolbar is-hidden">
       <span class="canvas__status" id="canvasStatus">Hazır</span>
       <div class="canvas__zoom">
         <button class="btn btn--icon" id="zoomOut" type="button" aria-label="Uzaklaştır">−</button>
@@ -325,7 +347,7 @@
         <button class="btn btn--icon" id="zoomIn" type="button" aria-label="Yakınlaştır">+</button>
       </div>
     </div>
-    <div class="canvas__scroll" id="canvasScroll">
+    <div class="canvas__scroll is-hidden" id="canvasScroll">
       <!-- HTML önizlemesi: sandbox KALICIDIR, script asla çalışmaz -->
       <iframe class="preview" id="preview" title="Belge önizlemesi" sandbox="allow-same-origin"></iframe>
       <!-- PDF önizlemesi: tarayıcının yerleşik görüntüleyicisi (blob: URL) -->
@@ -333,10 +355,17 @@
     </div>
 
     <!-- Sahne editörü tuvali — yalnız "Serbest tasarım" sekmesinde görünür -->
-    <div class="sc-shell is-hidden" id="sceneShell">
+    <div class="sc-shell" id="sceneShell">
       <div class="sc-toolbar" id="sceneToolbar"></div>
       <div class="sc-pages" id="scenePages"></div>
       <div class="sc-canvas" id="sceneCanvas"></div>
+      <!-- Sürükle-bırak örtüsü: yalnız sürükleme sırasında görünür -->
+      <div class="sc-drop is-hidden" id="sceneDrop" aria-hidden="true">
+        <div class="sc-drop__box">
+          <strong>Bırakın</strong>
+          <span>PDF · PNG/JPEG · sahne (.json)</span>
+        </div>
+      </div>
     </div>
   </section>
 

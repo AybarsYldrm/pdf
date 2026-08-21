@@ -754,3 +754,106 @@ test('geçmiş: açık işlem varken undo çağrılamaz', () => {
   h.begin('açık');
   assert.throws(() => h.undo(), /açık işlem/);
 });
+
+/* ================================================================== */
+/* Sayfa işlemleri                                                     */
+/* ================================================================== */
+
+test('sayfa kendi ölçüsünü taşıyabilir; taşımazsa belgeninki geçerlidir', () => {
+  const s = Scene.blank();
+  s.transaction('kur', () => s.addPage({ id: 'pg2', width: 841.89, height: 595.28 }));
+
+  assert.strictEqual(s.pageGeometry(0).width, s.page.width);
+  assert.strictEqual(s.pageGeometry('pg2').width, 841.89);
+  assert.strictEqual(s.pageGeometry('pg2').height, 595.28);
+
+  // Kenar boşluğu HER ZAMAN belgeden gelir: sayfaya özgü ölçü bir istisnadır.
+  assert.deepStrictEqual(s.pageGeometry('pg2').margin, s.page.margin);
+
+  // JSON turunda korunur
+  assert.strictEqual(Scene.fromJSON(s.toJSON()).pageGeometry('pg2').width, 841.89);
+});
+
+test('açık yatay ölçü "portrait" varsayılanına kurban gitmez', () => {
+  const s = Scene.blank({ size: { width: 841.89, height: 595.28 } });
+  assert.strictEqual(s.page.width, 841.89);
+  assert.strictEqual(s.page.height, 595.28);
+  assert.strictEqual(s.page.orientation, 'landscape');
+
+  // Yön AÇIKÇA istenirse yine çevirir.
+  const forced = Scene.blank({ size: { width: 841.89, height: 595.28 }, orientation: 'portrait' });
+  assert.strictEqual(forced.page.width, 595.28);
+});
+
+test('duplicatePage düğümlere YENİ kimlik verir', () => {
+  const s = Scene.blank();
+  s.transaction('kur', () => {
+    s.addNode(Scene.createNode('group', { id: 'g1', x: 0, y: 0, width: 100, height: 100 }));
+    s.addNode(Scene.createNode('rect', { id: 'r1', x: 5, y: 5, width: 20, height: 20 }),
+      { parentId: 'g1' });
+  });
+
+  let copy;
+  s.transaction('çoğalt', () => { copy = s.duplicatePage(s.pages[0].id); });
+
+  assert.strictEqual(s.pages.length, 2);
+  assert.strictEqual(s.pages[1].id, copy.id);
+
+  // Kimlik yenilenmezse `find` ilk sayfadakini bulur ve kullanıcı ikinci
+  // sayfadaki nesneyi seçtiğinde birincisi hareket eder.
+  const ids = [];
+  const walk = (list) => { for (const n of list) { ids.push(n.id); if (n.children) walk(n.children); } };
+  walk(copy.nodes);
+  assert.ok(!ids.includes('g1') && !ids.includes('r1'), 'kimlikler yenilenmeli');
+  assert.strictEqual(ids.length, 2, 'grup ve çocuğu kopyalanmalı');
+
+  s.undo();
+  assert.strictEqual(s.pages.length, 1);
+});
+
+test('rotatePage kâğıdı ve içeriği BİRLİKTE çevirir', () => {
+  const s = Scene.blank({ margin: { top: 0, right: 0, bottom: 0, left: 0 } });
+  s.transaction('kur', () => {
+    s.addNode(Scene.createNode('rect', { id: 'r1', x: 40, y: 40, width: 200, height: 60 }));
+  });
+  const before = s.pageGeometry(0);
+
+  s.transaction('çevir', () => s.rotatePage(s.pages[0].id, 90));
+
+  const after = s.pageGeometry(0);
+  assert.strictEqual(after.width, before.height);
+  assert.strictEqual(after.height, before.width);
+
+  const node = s.pages[0].nodes[0];
+  assert.strictEqual(node.rotation, 90);
+  // Görünen kutu: sağ üst köşeye taşınmış, en ve boy takas olmuş.
+  const box = geometry.rotatedBounds(node.frame, node.rotation);
+  assert.ok(Math.abs(box.x - (before.height - 100)) < 0.01, `x=${box.x}`);
+  assert.ok(Math.abs(box.y - 40) < 0.01, `y=${box.y}`);
+  assert.ok(Math.abs(box.width - 60) < 0.01);
+  assert.ok(Math.abs(box.height - 200) < 0.01);
+
+  // Dört çeyrek dönme başa döndürür.
+  s.transaction('çevir', () => s.rotatePage(s.pages[0].id, 270));
+  assert.strictEqual(s.pages[0].nodes[0].rotation, 0);
+  assert.deepStrictEqual(s.pages[0].nodes[0].frame, { x: 40, y: 40, width: 200, height: 60 });
+
+  s.undo();
+  assert.strictEqual(s.pages[0].nodes[0].rotation, 90);
+});
+
+test('setPageSize düğümleri TAŞIMAZ ve null ile belgeye döner', () => {
+  const s = Scene.blank();
+  s.transaction('kur', () => {
+    s.addNode(Scene.createNode('rect', { id: 'r1', x: 40, y: 40, width: 200, height: 60 }));
+  });
+
+  s.transaction('ölçü', () => s.setPageSize(s.pages[0].id, { width: 400, height: 400 }));
+  assert.strictEqual(s.pageGeometry(0).width, 400);
+  // Kâğıdı değiştirmek içeriği hareket ettirmez.
+  assert.deepStrictEqual(s.pages[0].nodes[0].frame, { x: 40, y: 40, width: 200, height: 60 });
+
+  s.transaction('ölçü', () => s.setPageSize(s.pages[0].id, null));
+  assert.strictEqual(s.pageGeometry(0).width, s.page.width);
+  assert.strictEqual(s.pages[0].width, undefined);
+});
