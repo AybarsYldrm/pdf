@@ -20,7 +20,7 @@ const { Registry, documentHash } = require('@fitfak/registry');
 
 const CONFIG = {
   port: Number(process.env.SCANNER_PORT) || 8080,
-  host: process.env.SCANNER_HOST || '127.0.0.1',
+  host: process.env.SCANNER_HOST || '0.0.0.0',
   /**
    * Kimlik sorgusu için gövde sınırı — bir özet ve bir belge numarası
    * birkaç yüz bayttır; 64 KB zaten cömerttir.

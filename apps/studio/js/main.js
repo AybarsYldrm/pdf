@@ -408,8 +408,31 @@ async function doSign() {
       });
     }
 
+    // Mevcut state atamanız
     state.pdf = fromBase64(result.pdf);
     $('#btnDownload').disabled = false;
+
+    // =========================================================
+    // YENİ EKLENEN KISIM: OTOMATİK PDF İNDİRME İŞLEMİ
+    // =========================================================
+    // state.pdf (Uint8Array/Buffer) verisini doğrudan Blob'a sarıyoruz
+    const pdfBlob = new Blob([state.pdf], { type: 'application/pdf' });
+    const blobUrl = URL.createObjectURL(pdfBlob);
+
+    const downloadLink = document.createElement('a');
+    downloadLink.href = blobUrl;
+
+    // İndirilecek dosyanın adını Belge No alanına göre ayarlıyoruz
+    const docName = $('#docNo').value ? `${$('#docNo').value}_imzali.pdf` : 'imzali_belge.pdf';
+    downloadLink.download = docName;
+
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+
+    // DOM ve bellek temizliği
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(blobUrl);
+    // =========================================================
 
     const achieved = result.achievedLevel;
     const requested = result.requestedLevel;

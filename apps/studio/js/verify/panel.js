@@ -142,7 +142,7 @@ function renderSignature(sig, handlers) {
   if (sig.chain && sig.chain.length) {
     body.appendChild(line(
       `Zincir: ${sig.chain.map((c) => c.cn || '?').join(' → ')}`,
-      sig.chain.trusted ? 'ok' : 'bad'
+      sig.isTrustedChain ? 'ok' : 'bad' // <-- DEĞİŞİKLİK BURADA
     ));
   }
 
