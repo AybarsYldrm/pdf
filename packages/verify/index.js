@@ -25,6 +25,9 @@ const {
 const ext = require('@fitfak/pades/src/cades/x509_ext');
 const cms = require('./src/cms');
 const { validatePath } = require('./src/path');
+const {
+  analyzeIncrementalChanges, validateByteRange, readDocMdp
+} = require('./src/revision');
 const { parseCrl, checkCrl } = require('@fitfak/pades/src/cades/crl');
 
 class VerifyError extends Error {
@@ -109,22 +112,34 @@ async function verifyPdf(pdfBuffer, opts = {}) {
 
   // Son imzadan sonra bayt olması tek başına "belge değiştirildi" demek DEĞİLDİR:
   // LTV/arşiv verisi (DSS/VRI) imzadan SONRA eklenir ve buna izin verilir.
-  // Sadece izin verilmeyen bir değişiklik varsa bayrak kalkar.
-  const tail = report.documentIntegrity.unsignedBytes > 0
-    ? pdfBuffer.slice(maxCovered).toString('latin1')
-    : '';
-  const tailIsOnlyValidationData = tail.length === 0 ||
-    (/\/DSS\b|\/VRI\b/.test(tail) && !/\/Type\s*\/Page\b/.test(tail));
+  //
+  // Bunun METİN ARAMASIYLA belirlenmesi bir atlatmaydı: eklenen bölümde
+  // `/DSS` geçiyor ve `/Type /Page` geçmiyorsa "yalnız doğrulama verisi"
+  // sayılıyordu. Saldırgan trailer'a bir `/DSS << /Certs [] >>` yazıp sayfanın
+  // içerik akışını yeniden tanımladığında bayrak sönüyordu. Artık iki sürüm de
+  // AÇILIP karşılaştırılıyor (bkz. src/revision.js).
+  const revisionDiff = analyzeIncrementalChanges(pdfBuffer, maxCovered);
 
-  report.documentIntegrity.trailingRevisionIsValidationData = tailIsOnlyValidationData;
+  const tailIsValidationData = report.documentIntegrity.unsignedBytes === 0 ||
+    (revisionDiff.contentChanged === false && revisionDiff.appendedIsStructured !== false);
+
+  report.documentIntegrity.trailingRevisionIsValidationData = tailIsValidationData;
   report.documentIntegrity.modifiedAfterSigning =
-    report.documentIntegrity.unsignedBytes > 0 && !tailIsOnlyValidationData;
+    revisionDiff.contentChanged === null ? null : !tailIsValidationData;
+  report.documentIntegrity.changes = revisionDiff.changes;
+  if (revisionDiff.errors.length) {
+    report.warnings.push(...revisionDiff.errors);
+  }
 
   for (const sig of signatures) {
     report.signatures.push(
       await verifyOneSignature(sig, {
         pdfBuffer, dss, trustAnchors, validationTime, useEmbedded,
         allowNetwork: !!opts.allowNetwork, revisions,
+        // En geniş kapsama göre yapılan karşılaştırma her imza için aynıdır;
+        // belgeyi imza başına yeniden açmak gereksiz iştir.
+        revisionDiff: sig.byteRange && (sig.byteRange[2] + sig.byteRange[3]) === maxCovered
+          ? revisionDiff : null,
         ignoreTimestampPoe: !!opts.ignoreTimestampPoe,
         // Seviye belirlemesi metin aramasıyla DEĞİL, ayrıştırılmış imza
         // alanlarıyla yapılır (bkz. determineLevel)
@@ -171,14 +186,29 @@ async function verifyOneSignature(sig, ctx) {
     entry.errors.push('/ByteRange okunamadı');
     return entry;
   }
-  const [s1, l1, s2, l2] = sig.byteRange;
+  const [, , s2, l2] = sig.byteRange;
   const covered = s2 + l2;
   entry.coverage = {
     byteRange: sig.byteRange,
     coveredBytes: covered,
     documentBytes: ctx.pdfBuffer.length,
-    coversWholeDocument: covered >= ctx.pdfBuffer.length
+    coversWholeDocument: covered >= ctx.pdfBuffer.length,
+    modifiedAfterSigning: null,
+    changes: []
   };
+
+  // /ByteRange'in YAPISI de doğrulanmalı. Dört sayının okunabilmesi onların
+  // anlamlı olduğunu göstermez: dosyanın başını dışarıda bırakan ya da
+  // boşluğu /Contents'ten geniş tutan bir ByteRange, imzasız içeriği imzalı
+  // gibi gösterir.
+  const brCheck = validateByteRange(sig, ctx.pdfBuffer.length);
+  if (!brCheck.ok) {
+    entry.indication = INDICATION.FAILED;
+    entry.subIndication = 'FORMAT_FAILURE';
+    entry.errors.push(...brCheck.errors);
+    return entry;
+  }
+
   if (!entry.coverage.coversWholeDocument) {
     entry.warnings.push(
       `Bu imza belgenin ilk ${covered} baytını kapsıyor; ` +
@@ -395,10 +425,64 @@ async function verifyOneSignature(sig, ctx) {
       `Yoldaki ${nonRootCount} sertifikadan ${covereds} tanesi için iptal kanıtı var`);
   }
 
-  // ── 9. Seviye ──
+  // ── 9. İmzadan sonraki değişiklikler ──
+  //
+  // Bu blok olmadan, imzalı bir belgeye artımlı güncelleme ekleyip sayfanın
+  // içerik akışını tamamen değiştirmek imzayı bozmuyordu: kriptografi doğru,
+  // gösterge TOTAL-PASSED. Kapsanan baytlar doğrulanmış olabilir; belge
+  // BUNDAN İBARET DEĞİLDİR.
+  if (!entry.coverage.coversWholeDocument) {
+    const diff = ctx.revisionDiff || analyzeIncrementalChanges(ctx.pdfBuffer, covered);
+    const docMdp = readDocMdp(ctx.pdfBuffer, sig);
+    entry.coverage.modifiedAfterSigning =
+      diff.contentChanged === null ? null
+        : (diff.contentChanged || diff.appendedIsStructured === false);
+    entry.coverage.changes = diff.changes;
+    entry.coverage.certification = docMdp.isCertification
+      ? { permissions: docMdp.permissions } : null;
+
+    if (diff.contentChanged === null) {
+      // Karar verilemedi. "Sorun görünmüyor" ile "sorun yok" aynı şey değildir.
+      entry.indication = INDICATION.INDETERMINATE;
+      entry.subIndication = 'SIG_CONSTRAINTS_FAILURE';
+      entry.errors.push('İmza sonrası eklenen bölüm çözümlenemedi: ' +
+        (diff.errors.join('; ') || 'bilinmeyen sebep'));
+      return entry;
+    }
+
+    if (entry.coverage.modifiedAfterSigning) {
+      // İMZA SAĞLAM, BELGE AYNI DEĞİL.
+      //
+      // Kriptografi bozulmadı: `cms.signatureValid` true kalır ve imza
+      // KAPSADIĞI sürüm için geçerlidir. Ama okuyucunun gördüğü belge o sürüm
+      // değildir. Bunu TOTAL-PASSED saymak, imzayı imzalanmamış içeriğe kefil
+      // yapar; bu, PDF imzalarına yönelik en pratik saldırıdır ve saldırganın
+      // eklemesi ile meşru bir düzenleme birbirinden ayırt edilemez.
+      //
+      // DocMDP P=1 (hiçbir değişikliğe izin yok) varsa değişiklik imzalayanın
+      // açık beyanını ihlal eder: bu kesin bir başarısızlıktır.
+      const kesin = docMdp.isCertification && docMdp.permissions === 1;
+      entry.indication = kesin ? INDICATION.FAILED : INDICATION.INDETERMINATE;
+      entry.subIndication = 'DOC_MODIFIED_AFTER_SIGNING';
+      entry.errors.push(
+        (kesin
+          ? 'Sertifikasyon imzası hiçbir değişikliğe izin vermiyor (DocMDP P=1) ama '
+          : 'İmzalandıktan sonra belge değiştirilmiş — imza yalnız kapsadığı ' +
+            `ilk ${covered} baytı doğrular: `) +
+        (diff.changes.join('; ') || 'imza dışı bölüm değişmiş'));
+      return entry;
+    }
+
+    entry.warnings.push('İmzadan sonra eklenen bölüm belgenin görünen ' +
+      'içeriğini değiştirmiyor (doğrulama verisi ya da sonraki imza).');
+  } else {
+    entry.coverage.modifiedAfterSigning = false;
+  }
+
+  // ── 10. Seviye ──
   entry.achievedLevel = determineLevel(entry, sig, ctx);
 
-  // ── 10. Nihai gösterge ──
+  // ── 11. Nihai gösterge ──
   //
   // TEK YÜKSELTME KURALI: hiç hata yoksa ve bir alt gösterge konmadıysa imza
   // geçer. Eski kodda ilk dal `entry.errors`'a hiç bakmıyordu; bir alt gösterge

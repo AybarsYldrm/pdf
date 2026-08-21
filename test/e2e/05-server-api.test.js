@@ -478,8 +478,13 @@ test('İmzalı belge düzenlenince imza geçerli kalır (uçtan uca)', async () 
   const report = await verifyPdf(unb64(edited.body.pdf), {
     trustAnchors: [svc.pki.root.certPem], offline: true
   });
-  assert.strictEqual(report.signatures[0].indication, INDICATION.PASSED);
+  // İmzanın KRİPTOGRAFİSİ bozulmadı — ama belge imzalandığı hâlde değil.
+  // Doğrulayıcı bu ikisini ayırır: `cms.signatureValid` true kalır,
+  // `indication` TOTAL-PASSED olmaz. Düzenlemeyi yapan biz olsak da,
+  // doğrulayan taraf bunu saldırgan düzenlemesinden ayırt edemez.
   assert.strictEqual(report.signatures[0].cms.signatureValid, true);
+  assert.strictEqual(report.signatures[0].indication, INDICATION.INDETERMINATE);
+  assert.strictEqual(report.signatures[0].subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
   assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
     'değişiklik gizlenmemeli');
 });

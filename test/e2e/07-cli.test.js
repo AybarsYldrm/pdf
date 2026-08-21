@@ -198,7 +198,11 @@ test('edit: imzalı belge artımlı düzenlenir, imza geçerli kalır', async ()
   const verified = await run(verifyArgs(at('duzenli.pdf'), ['--json']));
   const report = JSON.parse(verified.stdout);
 
-  assert.strictEqual(report.signatures[0].indication, 'TOTAL-PASSED');
+  // İmza kapsadığı sürüm için geçerli, ama belge o sürüm değil: CLI de
+  // yeşil tik göstermemeli. `cms.signatureValid` ayrımı raporda duruyor.
+  assert.strictEqual(report.signatures[0].cms.signatureValid, true);
+  assert.strictEqual(report.signatures[0].indication, 'INDETERMINATE');
+  assert.strictEqual(report.signatures[0].subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
   assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
     'değişiklik gizlenmemeli');
 });

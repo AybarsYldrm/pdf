@@ -192,15 +192,27 @@ test('imzalı PDF artımlı düzenlenince imza geçerli kalır', async () => {
 
   const after = await check(edited);
   assert.strictEqual(after.signatures.length, 1);
-  assert.strictEqual(after.signatures[0].indication, 'TOTAL-PASSED',
-    'imza kriptografik olarak geçerli kalmalı');
-  assert.strictEqual(after.signatures[0].cms.signatureValid, true);
+
+  // İMZA SAĞLAM, BELGE AYNI DEĞİL — ve gösterge bunu söylemek zorunda.
+  //
+  // Kriptografi bozulmadı: imza kapsadığı sürüm için hâlâ geçerlidir.
+  // Ama okuyucunun gördüğü belge o sürüm değildir. Bunu TOTAL-PASSED
+  // saymak imzayı imzalanmamış içeriğe kefil yapardı ve saldırganın
+  // eklemesi ile buradaki meşru düzenleme ayırt edilemezdi.
+  assert.strictEqual(after.signatures[0].cms.signatureValid, true,
+    'imzanın kendisi kriptografik olarak geçerli kalmalı');
   assert.strictEqual(after.signatures[0].cms.messageDigestMatches, true);
+  assert.strictEqual(after.signatures[0].indication, 'INDETERMINATE',
+    'sonradan değiştirilmiş belge TOTAL-PASSED dönemez');
+  assert.strictEqual(after.signatures[0].subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
 
   // Değişiklik gizlenmemeli: rapor açıkça "sonradan değiştirildi" demeli
   assert.strictEqual(after.documentIntegrity.modifiedAfterSigning, true);
   assert.ok(after.documentIntegrity.unsignedBytes > 0);
   assert.strictEqual(after.signatures[0].coverage.coversWholeDocument, false);
+  assert.strictEqual(after.signatures[0].coverage.modifiedAfterSigning, true);
+  assert.ok(after.signatures[0].coverage.changes.length > 0,
+    'neyin değiştiği raporlanmalı');
 
   const reloaded = PdfDocument.load(edited);
   assert.strictEqual(reloaded.pageCount, 4);
@@ -245,10 +257,45 @@ test('düzenlenmiş imzalı belge ikinci kez imzalanabilir, iki imza da geçerli
 
   const report = await check(second);
   assert.strictEqual(report.signatures.length, 2);
+
+  // İkisinin de KRİPTOGRAFİSİ geçerli — ama ikisi aynı belgeyi imzalamadı.
   for (const sig of report.signatures) {
-    assert.strictEqual(sig.indication, 'TOTAL-PASSED', `${sig.fieldName || '?'} geçersiz`);
     assert.strictEqual(sig.cms.signatureValid, true);
   }
+
+  // A imzaladıktan SONRA sayfaya metin eklendi: A'nın imzası artık okuyucunun
+  // gördüğü belgeyi doğrulamıyor. B ise düzenlenmiş hâli imzaladı.
+  const [ilk, ikinci] = report.signatures;
+  assert.strictEqual(ilk.indication, 'INDETERMINATE',
+    'ara düzenlemeden önceki imza belgenin şimdiki hâline kefil olamaz');
+  assert.strictEqual(ilk.subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
+  assert.strictEqual(ikinci.indication, 'TOTAL-PASSED',
+    'düzenlenmiş hâli imzalayan ikinci imza geçerli olmalı');
+});
+
+test('ardışık imzalama: ARA DÜZENLEME YOKSA iki imza da geçerli kalır', async () => {
+  // Bir öncekinin karşıtı: iki imza arasında belge DEĞİŞMEZSE ilk imza da
+  // geçerli kalmalı. Yeni bütünlük kontrolü bu meşru akışı bozmamalı.
+  const first = (await manager.sign(signOptions({
+    mode: 'T',
+    pdfBuffer: fixture('classic-xref-3p.pdf'),
+    fieldName: 'Ardisik_A'
+  }))).pdf;
+
+  const second = (await manager.sign(signOptions({
+    mode: 'T',
+    pdfBuffer: first,
+    fieldName: 'Ardisik_B'
+  }))).pdf;
+
+  const report = await check(second);
+  assert.strictEqual(report.signatures.length, 2);
+  for (const sig of report.signatures) {
+    assert.strictEqual(sig.indication, 'TOTAL-PASSED',
+      `ara düzenleme yokken imza geçersiz sayıldı: ${sig.subIndication} — ` +
+      `${sig.errors.join(' | ')}`);
+  }
+  assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, false);
 });
 
 test('modern PDF LTV ile LT seviyesine çıkarılır', async () => {

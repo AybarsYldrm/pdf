@@ -230,6 +230,118 @@ test('nihai gösterge: errors[] doluyken imza TOTAL-PASSED olamaz', async () => 
   }
 });
 
+/* ================================================================== */
+/* 5. İmzadan sonra artımlı güncelleme ile içerik değiştirme           */
+/* ================================================================== */
+
+/** İmzalı PDF'e, sayfanın içerik akışını yeniden tanımlayan bir ek koyar. */
+function appendEvilUpdate(pdf, { dssBait }) {
+  const s = pdf.toString('latin1');
+  const cm = /\/Type\s*\/Page\b[\s\S]{0,400}?\/Contents\s+(\d+)\s+0\s+R/.exec(s);
+  assert.ok(cm, 'kurgu geçersiz: sayfa içerik akışı bulunamadı');
+  const contentObj = Number(cm[1]);
+
+  const trailer = s.slice(s.lastIndexOf('trailer'));
+  const size = Number((/\/Size\s+(\d+)/.exec(trailer) || [])[1] || 32);
+  const root = Number((/\/Root\s+(\d+)\s+0\s+R/.exec(trailer) || [])[1] || 1);
+  const prev = Number((/startxref\s+(\d+)\s+%%EOF\s*$/.exec(s.trimEnd() + '\n') || [])[1] || 0);
+
+  const evil = 'BT /F1 18 Tf 56 780 Td (ODEME EMRI: 10.000.000 TL) Tj ET\n';
+
+  const parts = [];
+  let off = pdf.length;
+  const add = (t) => { parts.push(Buffer.from(t, 'latin1')); off += Buffer.byteLength(t, 'latin1'); };
+
+  if (!s.endsWith('\n')) add('\n');
+  const contentOffset = off;
+  add(`${contentObj} 0 obj\n<< /Length ${Buffer.byteLength(evil, 'latin1')} >>\n` +
+      `stream\n${evil}\nendstream\nendobj\n`);
+
+  const xrefStart = off;
+  add(`xref\n0 1\n0000000000 65535 f \n${contentObj} 1\n` +
+      `${String(contentOffset).padStart(10, '0')} 00000 n \n`);
+  // `/DSS` yemi: eski sezgisel kontrol tail'de bu dizgeyi arıyordu.
+  add(`trailer\n<< /Size ${size} /Root ${root} 0 R /Prev ${prev}` +
+      `${dssBait ? ' /DSS << /Certs [] >>' : ''} >>\n`);
+  add(`startxref\n${xrefStart}\n%%EOF\n`);
+
+  return Buffer.concat([pdf, ...parts]);
+}
+
+for (const dssBait of [false, true]) {
+  const label = dssBait ? '/DSS yemiyle' : 'düz';
+  test(`artımlı güncelleme (${label}): değiştirilmiş belge TOTAL-PASSED dönmez`, async () => {
+    const base = await signBaseline();
+    const report = await verifyPdf(appendEvilUpdate(base.pdf, { dssBait }), {
+      trustAnchors: [pki.root.certPem], allowNetwork: false
+    });
+    const s = report.signatures[0];
+
+    // İmzanın kendisi bozulmadı — reddin sebebi kriptografi değil.
+    assert.strictEqual(s.cms.signatureValid, true);
+    assert.strictEqual(s.cms.messageDigestMatches, true);
+
+    assert.notStrictEqual(s.indication, INDICATION.PASSED,
+      'sayfa içeriği değiştirilmiş belge geçerli sayılmamalı');
+    assert.strictEqual(s.subIndication, 'DOC_MODIFIED_AFTER_SIGNING');
+    assert.strictEqual(report.documentIntegrity.modifiedAfterSigning, true,
+      `/DSS yemi bütünlük bayrağını söndürmemeli (yem: ${dssBait})`);
+    assert.ok(s.coverage.changes.some((c) => /içerik akışı değiştirildi/.test(c)),
+      `değişikliğin ne olduğu raporlanmalı: ${JSON.stringify(s.coverage.changes)}`);
+  });
+}
+
+test('/ByteRange: dosyanın başını dışarıda bırakan imza reddedilir', async () => {
+  const base = await signBaseline();
+  const s = base.pdf.toString('latin1');
+  const m = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)([^\]]*)\]/.exec(s);
+  assert.ok(m, '/ByteRange bulunamadı');
+
+  // s1'i 0'dan büyük yap: ilk baytlar imza kapsamı dışında kalır.
+  // Dosya uzunluğu KORUNMALI, yoksa bütün ofsetler kayar ve test başka bir
+  // şeyi ölçmeye başlar; kısa kalan yer boşlukla doldurulur.
+  const [, , l1, s2, l2] = m;
+  const govde = `/ByteRange [8 ${Number(l1) - 8} ${s2} ${l2}`;
+  assert.ok(govde.length + 1 <= m[0].length, 'kurgu sığmıyor');
+  const yeni = govde + ' '.repeat(m[0].length - govde.length - 1) + ']';
+
+  const tampered = Buffer.from(base.pdf);
+  tampered.write(yeni, m.index, 'latin1');
+
+  const report = await verifyPdf(tampered, {
+    trustAnchors: [pki.root.certPem], allowNetwork: false
+  });
+  const sig = report.signatures[0];
+
+  assert.strictEqual(sig.indication, INDICATION.FAILED);
+  assert.strictEqual(sig.subIndication, 'FORMAT_FAILURE');
+  assert.ok(sig.errors.some((e) => /dosyanın başından başlamıyor/.test(e)),
+    `beklenen hata yok: ${sig.errors.join(' | ')}`);
+});
+
+test('/ByteRange: boşluk /Contents\'ten genişse reddedilir', async () => {
+  const base = await signBaseline();
+  const s = base.pdf.toString('latin1');
+  const m = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)([^\]]*)\]/.exec(s);
+  const [, s1, l1, s2, l2] = m.map((v, i) => (i === 0 || i === 5 ? v : Number(v)));
+
+  // l1'i kısaltıp l2'yi eşit uzat: boşluk /Contents'ten 16 bayt geniş olur
+  // ama kapsanan toplam bayt sayısı değişmez.
+  const yeni = `/ByteRange [${s1} ${l1 - 16} ${s2} ${l2}${m[5]}]`;
+  if (yeni.length !== m[0].length) return;         // hizalama tutmadıysa atla
+
+  const tampered = Buffer.from(base.pdf);
+  tampered.write(yeni, m.index, 'latin1');
+
+  const report = await verifyPdf(tampered, {
+    trustAnchors: [pki.root.certPem], allowNetwork: false
+  });
+  const sig = report.signatures[0];
+
+  assert.notStrictEqual(sig.indication, INDICATION.PASSED,
+    '/Contents dışına taşan boşluk kabul edilmemeli');
+});
+
 test('temel akış: düzgün imza hâlâ TOTAL-PASSED dönüyor', async () => {
   const base = await signBaseline();
   const report = await verifyPdf(base.pdf, {
