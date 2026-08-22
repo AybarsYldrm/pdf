@@ -23,11 +23,13 @@ const { compileToPdf } = require('./src/compile/pdf');
 const { compileToHtml } = require('./src/compile/html');
 const { importFromHtml } = require('./src/import/html');
 const { importFromPdf } = require('./src/import/pdf');
+const { analyzeDocument } = require('./src/import/pdfanalyze');
 const { validateScene, SceneError, parseColor, colorToHex } = require('./src/validate');
 const { SCHEMA_VERSION, PAGE_SIZES, NODE_TYPES, COMMON_FIELDS, LIMITS } = require('./src/schema');
 const { AssetManager, AssetError, sniff } = require('./src/assets');
 const { History } = require('./src/history');
 const geometry = require('./src/geometry');
+const pagespace = require('./src/pagespace');
 const units = require('./src/units');
 
 module.exports = {
@@ -56,12 +58,16 @@ module.exports = {
   // İçe aktarıcılar
   importFromHtml,
   importFromPdf,
+  analyzeDocument,
 
   // Geri alma
   History,
 
   // Yardımcılar
   geometry,
+  // PDF ↔ sahne koordinat dönüşümünün TEK kaynağı. Görünür imza yerleştiren,
+  // form alanı okuyan ya da PDF kutusu çizen her çağıran bunu kullanmalıdır.
+  pagespace,
   units,
   parseColor,
   colorToHex

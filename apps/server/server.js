@@ -585,12 +585,21 @@ const routes = {
     policy.checkBytes(pdf, 'maxPdfBytes', 'PDF');
 
     try {
-      const { scene: imported, warnings } = scene.importFromPdf(pdf, {
+      const { scene: imported, warnings, analysis } = scene.importFromPdf(pdf, {
         password: body.password || '',
         fonts: sceneFonts(body.fonts),
         maxPages: policy.LIMITS.maxPages
       });
-      sendJson(res, 200, { scene: imported.toJSON(), warnings });
+      // VARLIK BAYTLARI DA DÖNER. Yalnız üst veriyi göndermek, tarayıcıdaki
+      // editörün görselleri gösterememesi VE geri derlemede varlığı
+      // bulamayıp ERR_ASSET_MISSING vermesi demekti: PDF'ten gelen her
+      // görsel sessizce kaybolurdu.
+      sendJson(res, 200, {
+        scene: imported.toJSON(),
+        assets: assetPayload(imported.assets),
+        analysis: analysis || null,
+        warnings
+      });
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
     }
@@ -622,11 +631,11 @@ const routes = {
         }
       });
 
-      // Varlık baytları da dönmeli: tarayıcıdaki editör onları gösterecek
-      const assetBytes = imported.assets.manifest().map((a) => ({
-        ...a, base64: b64(imported.assets.bytes(a.id))
-      }));
-      sendJson(res, 200, { scene: imported.toJSON(), assets: assetBytes, warnings });
+      sendJson(res, 200, {
+        scene: imported.toJSON(),
+        assets: assetPayload(imported.assets),
+        warnings
+      });
     } catch (err) {
       return sendError(res, 400, err.code || 'ERR_IMPORT', err.message);
     }
@@ -1149,6 +1158,27 @@ function htmlFonts(requested) {
   const wanted = families.length ? families : registry.familyNames();
   const { faces } = registry.facesFor(wanted);
   return faces.length ? faces : [{ family: 'Ubuntu', src: CONFIG.defaultFont }];
+}
+
+/**
+ * Varlık üst verisi + BAYTLARI.
+ *
+ * İçe aktarma uçlarının ikisi de bunu döndürür. Daha önce yalnız HTML yolu
+ * baytları gönderiyor, PDF yolu göndermiyordu; tarayıcıdaki editör görselin
+ * kimliğini biliyor ama içeriğini bilmiyordu. Sonuç: PDF'ten gelen görseller
+ * tuvalde boş kutu, yeniden derlemede kayıp. Tek bir yardımcı bu ayrışmayı
+ * baştan imkânsız kılar.
+ *
+ * @param {Object} assets AssetManager
+ * @returns {Array<Object>} `{ id, kind, mime, sha256, size, …, base64 }`
+ */
+function assetPayload(assets) {
+  return assets.manifest().map((a) => {
+    const bytes = assets.bytes(a.id);
+    // Baytı olmayan bir varlık üst verisi, çağıranı olmayan bir dosyaya
+    // inandırır; göndermemek daha dürüsttür.
+    return bytes ? { ...a, base64: b64(bytes) } : null;
+  }).filter(Boolean);
 }
 
 function sceneFonts(requested) {

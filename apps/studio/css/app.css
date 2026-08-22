@@ -27,6 +27,28 @@
   --ui-panel-w: 320px;
   --ui-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ui-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+
+  /* ------------------------------------------------------------------
+     ANLAMSAL TAKMA ADLAR.
+
+     Sahne editörü (scene.css) kendi kısa adlarını kullanıyordu ve bunlar
+     hiçbir yerde TANIMLI DEĞİLDİ; her kural yedek değerine düşüyordu. Sonuç:
+     koyu temada uygulamanın yarısı koyu, editör bembeyaz kalıyordu. Takma
+     adlar `--ui-*` üzerinden kurulunca tek bir palet olur ve tema değişimi
+     editörü de kapsar.
+     ------------------------------------------------------------------ */
+  --line: var(--ui-border);
+  --line-strong: var(--ui-border-strong);
+  --surface: var(--ui-surface);
+  --surface-2: var(--ui-surface-2);
+  --ink: var(--ui-ink);
+  --muted: var(--ui-ink-faint);
+  --accent: var(--ui-accent);
+  --accent-soft: var(--ui-accent-soft);
+  --danger: var(--ui-danger);
+  --warning: var(--ui-warn);
+  --success: var(--ui-ok);
+  --canvas-bg: var(--ui-bg);
 }
 
 [data-theme="dark"] {
@@ -434,3 +456,83 @@ html, body {
   .workspace { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .panel--left { max-height: 45vh; }
 }
+
+
+/* ==========================================================================
+   Belge çözümlemesi paneli.
+
+   İçe aktarılan PDF'in envanteri. Amaç kullanıcıyı uyarı yağmuruna tutmak
+   değil, "ne kaybettim?" sorusunun tek bir cevabı olması.
+   ========================================================================== */
+
+.docscan {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+}
+
+.docscan__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--ui-surface-2);
+}
+
+.docscan__row.is-warn {
+  background: var(--ui-warn-soft);
+  color: var(--ui-warn);
+}
+
+.docscan__k { color: var(--ui-ink-soft); }
+.docscan__row.is-warn .docscan__k { color: inherit; }
+
+.docscan__v {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.docscan__notes {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.docscan__notes summary {
+  cursor: pointer;
+  color: var(--ui-ink-soft);
+}
+
+.docscan__notes ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--ui-ink-soft);
+}
+
+.docscan__notes code {
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  color: var(--ui-ink-faint);
+}
+
+/* ── Bildirim ilerlemesi ─────────────────────────────────────── */
+
+.toast__bar {
+  margin-top: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ui-border);
+  overflow: hidden;
+}
+
+.toast__bar i {
+  display: block;
+  height: 100%;
+  background: var(--ui-accent);
+  transition: width .2s ease;
+}
+
+/* Süresiz bildirim: iş sürüyor demektir, kendiliğinden kapanmaz. */
+.toast--loading { border-left-color: var(--ui-accent); }
+.toast--info    { border-left-color: var(--ui-ink-faint); }

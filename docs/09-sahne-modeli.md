@@ -151,6 +151,42 @@ gördüğü yeri PDF'te de görmelidir.
 "Eşit aralıklı dağıtım" ile "eşit merkez mesafesi" farklıdır; farklı boyutlu
 nesnelerde gözle doğru görünen birincisidir ve uygulanan odur.
 
+`pageGeometry(doc, page)` bir sayfanın **etkin** ölçüsünü verir: sayfa kendi
+ölçüsünü taşıyorsa o, taşımıyorsa belgenin geneli. `scene.page.width`'e
+doğrudan bakan her kod, çok ölçülü belgelerde ilk sayfanın ölçüsünü bütün
+sayfalara dayatır.
+
+### PDF ↔ sahne: `pagespace.js`
+
+İki uzay vardır ve karıştırılmamalıdır:
+
+| | Başlangıç | y ekseni |
+|---|---|---|
+| PDF kullanıcı uzayı | sol **alt** | yukarı |
+| Sahne uzayı | sol **üst** | aşağı |
+
+Aradaki dönüşüm **tek bir yerde** tanımlıdır. Daha önce üç yerde ayrı ayrı
+yapılıyordu: çizim toplayıcı sayfa matrisiyle (doğru), metin içe aktarıcısı
+`pageHeight - y` ile (yanlış), imza yerleştirici üçüncü bir yolla.
+`pageHeight - y` ne `/CropBox` kaymasını ne `/Rotate`ı görür — bu yüzden
+yatay ve döndürülmüş sayfalarda metin, çizimlerden koparak sayfanın başka bir
+köşesine düşüyordu.
+
+**Kural: bir dosyada `pageHeight - y` görürseniz o bir hatadır.**
+
+`pagespace` şunları verir:
+
+- `effectiveGeometry(geo)` — `/MediaBox`, `/CropBox` (MediaBox ile kesiştirilir)
+  ve `/Rotate`tan görünen sayfa kutusu; 90/270'te en-boy takas edilir
+- `pageMatrix` / `inverseMatrix` — iki yönlü dönüşüm
+- `toScene` / `toPdf` — nokta dönüşümü
+- `sceneRectToPdf` / `pdfRectToScene` — kutu dönüşümü (imza yuvası, bağlantı,
+  form alanı); dönmüş sayfada köşeler yer değiştirdiği için min/max alınır
+- `placeTextRect` — metnin KENDİ eksenlerindeki kutuyu sahne düğümüne çevirir;
+  satır/paragraf gruplaması okuma uzayında yapılır, dönme bir kez uygulanır
+- `placeUnitSquare` — görsel XObject matrisinden yerleşim; eğrilme ve
+  aynalanma **bildirilir**, sessizce dikleştirilmez
+
 ---
 
 ## 5. Geri alma: anlık görüntü değil, ters işlem
@@ -360,14 +396,23 @@ tek yönlü bir akış yeterlidir ve düz `node:http` ile çalışır.
 | Uç | İş |
 |---|---|
 | `POST /api/scene/render` | Sahne → PDF + imza yuvası manifesti |
-| `POST /api/scene/import/pdf` | PDF → sahne |
-| `POST /api/scene/import/html` | HTML → sahne |
+| `POST /api/scene/import/pdf` | PDF → sahne + varlık baytları + belge çözümlemesi |
+| `POST /api/scene/import/html` | HTML → sahne + varlık baytları |
 | `POST /api/collab/create` · `join` · `ops` · `leave` | Ortak oturum |
 | `GET /api/collab/stream` | Olay akışı (SSE) |
 | `GET /vendor/scene.esm.js` | Tarayıcı paketi (anında üretilir) |
 
 Varlık baytları sahnenin **dışında**, ayrı bir dizide taşınır: on yerde
-kullanılan bir görsel bir kez gider.
+kullanılan bir görsel bir kez gider. **Her iki içe aktarma ucu da baytları
+döndürür** — yalnız üst veri dönmek, tarayıcıdaki editörün görselin kimliğini
+bilip içeriğini bilmemesi ve belge yeniden derlendiğinde görselin sessizce
+kaybolması demektir.
+
+`import/pdf` ayrıca bir **belge çözümlemesi** (`analysis`) döndürür: sayfa
+ölçüleri, dönme, içe aktarılan nesne sayıları, form alanları, imza alanları,
+açıklamalar, şifreleme ve iddia edilen PDF/A profili. Bu bir DENETİM değildir;
+"iddia" ile "doğrulanmış" ayrı şeylerdir ve gerçek denetim
+`@fitfak/conformance`'ındır.
 
 Güvenlik: font **dosya yolu** kabul edilmez, yalnız sunucunun tanıdığı
 aileler seçilebilir. Varlık kimlikleri içerikten hesaplanır. Bütün sahne
@@ -404,8 +449,15 @@ Bunlar **kabul edilmiş** sınırlardır; "destekleniyor" diye sunulmamalıdır.
 - **İçe aktarmada düğüm bütçesi vardır** (varsayılan 4000/belge). Karmaşık
   bir grafik on binlerce yol içerebilir; sınıra kadar alınır ve kalanın
   alınmadığı `WARN_IMPORT_NODE_BUDGET` ile söylenir.
-- **Sahne tek sayfa boyutu taşır.** Kaynak belgede sayfalar farklı
-  boyutluysa ilk sayfanınki kullanılır (`WARN_PAGE_SIZE_MISMATCH`).
+- **Sayfalar KENDİ ölçülerini taşıyabilir.** `page.width`/`page.height`
+  verilirse o sayfa için geçerlidir; verilmezse belgenin `page` geometrisi
+  kullanılır. Kenar boşluğu her zaman belgeden gelir. İçe aktarmada her
+  sayfa kaynaktaki ölçüsünü korur ve belge ölçüsü ilk sayfanınkidir; karışık
+  ölçü `WARN_PAGE_SIZE_MIXED` ile bildirilir.
+- **Sahnede `/Rotate` alanı YOKTUR.** Sahne "görünen"i taşır. İçe aktarmada
+  sayfa dönmesi gerçekten uygulanır (ölçü takas edilir, düğümler döner);
+  `Scene.rotatePage()` de aynı şeyi yapar. Bunun bedeli: dışa aktarılan PDF
+  `/Rotate 0` ile yazılır — görsel sonuç aynıdır, sözlük girdisi değil.
 - **Metin kutuya sığmazsa kırpılmaz, uyarılır** (`WARN_TEXT_OVERFLOW`).
   Sahne PDF'inde taşan metin çizilir; kullanıcı kutuyu büyütmelidir.
 - **PDF/UA'da okuma sırası TAHMİN edilir.** Serbest yerleşimde "önce yazılan

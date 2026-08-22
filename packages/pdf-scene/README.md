@@ -60,13 +60,27 @@ const { pdf, manifest, warnings } = compileToPdf(scene, {
 | `scene.group / ungroup / reorder` | Yapı ve z sırası |
 | `scene.copy / paste / duplicate` | Pano |
 | `scene.align / alignToPage / distribute` | Hizalama |
+| `scene.addPage / removePage / movePage` | Sayfa işlemleri |
+| `scene.duplicatePage / rotatePage / setPageSize` | Sayfa çoğaltma, çevirme, ölçü |
+| `scene.pageGeometry(page)` | Sayfanın **etkin** ölçüsü (kendi ölçüsü ya da belgeninki) |
 | `scene.undo() / redo()` | Geri alma |
 | `validateScene(doc)` | Doğrula + normalleştir |
 | `compileToPdf(scene, { fonts, assets })` | Sahne → PDF |
 | `compileToHtml(scene, { assets })` | Sahne → önizleme HTML'i |
-| `importFromHtml(opts)` / `importFromPdf(bytes, opts)` | İçe aktar |
+| `importFromHtml(opts)` | HTML → sahne |
+| `importFromPdf(bytes, opts)` | PDF → `{ scene, warnings, analysis }` |
+| `analyzeDocument(doc)` | Belge envanteri (sayfa, form, imza, açıklama, profil) |
 | `AssetManager` | SHA-256 tekilleştirmeli varlık havuzu |
-| `geometry` | Matris, sınır kutusu, hizalama, yapışma |
+| `geometry` | Matris, sınır kutusu, hizalama, yapışma, sayfa ölçüsü |
+| `pagespace` | **PDF ↔ sahne koordinat dönüşümünün tek kaynağı** |
+
+### Koordinat kuralı
+
+PDF sol-**alt** başlangıçlıdır ve y yukarı büyür; sahne sol-**üst**
+başlangıçlıdır ve y aşağı büyür. Bu dönüşüm yalnız `pagespace.js` içinde
+yapılır ve `/MediaBox`, `/CropBox`, `/Rotate` üçünü **birlikte** çözer.
+Başka bir dosyada `pageHeight - y` görürseniz o bir hatadır: kırpma kutusu
+kaymasını ve sayfa dönmesini görmez.
 
 ## Tarayıcı paketi
 

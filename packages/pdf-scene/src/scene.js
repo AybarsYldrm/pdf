@@ -62,7 +62,9 @@ class Scene {
       meta: { title: opts.title || '', lang: opts.lang || 'tr-TR' },
       page: {
         size: opts.size || 'A4',
-        orientation: opts.orientation || 'portrait',
+        // Yön yalnız İSTENDİĞİNDE geçer. Varsayılan olarak "portrait"
+        // göndermek, açıkça verilmiş yatay bir ölçüyü ters çevirirdi.
+        orientation: opts.orientation,
         margin: opts.margin || { top: 56.7, right: 51, bottom: 56.7, left: 51 }
       },
       assets: [],
@@ -115,6 +117,27 @@ class Scene {
 
   pageAt(index) { return this.doc.pages[index] || null; }
   pageById(id) { return this.doc.pages.find((p) => p.id === id) || null; }
+
+  /**
+   * Bir SAYFANIN etkin geometrisi.
+   *
+   * Sayfa kendi ölçüsünü taşıyorsa o, taşımıyorsa belgenin geneli geçerlidir.
+   * Kenar boşluğu her zaman belgeden gelir: sayfaya özgü ölçü bir İSTİSNADIR
+   * (araya giren yatay tablo, sondaki A3 kroki), belgenin yerleşim düzenini
+   * bozmak için değil.
+   *
+   * Çağıranlar `scene.page.width` yerine BUNU kullanmalıdır; aksi hâlde
+   * belgedeki ilk sayfanın ölçüsü bütün sayfalara dayatılır.
+   *
+   * @param {Object|string|number} page sayfa nesnesi, kimliği ya da sırası
+   * @returns {{width:number, height:number, margin:Object}}
+   */
+  pageGeometry(page) {
+    const p = typeof page === 'number' ? this.pageAt(page)
+      : typeof page === 'string' ? this.pageById(page)
+        : page;
+    return geometry.pageGeometry(this.doc, p);
+  }
 
   /** Düğümü, kapsayıcısını ve ata zincirini bulur. */
   find(nodeId) {
@@ -537,6 +560,12 @@ class Scene {
       name: opts.name || `Sayfa ${this.doc.pages.length + 1}`,
       nodes: opts.nodes || []
     };
+    // Sayfaya özgü ölçü İKİSİ birden verilirse geçerlidir; yarım bir ölçü
+    // (yalnız genişlik) sessizce belgeninkiyle karışırdı.
+    if (opts.width > 0 && opts.height > 0) {
+      page.width = round(opts.width);
+      page.height = round(opts.height);
+    }
     if (opts.background) page.background = opts.background;
     const index = opts.index === undefined ? this.doc.pages.length : opts.index;
 
@@ -560,6 +589,166 @@ class Scene {
       () => this.doc.pages.splice(Math.min(index, this.doc.pages.length), 0, page)
     );
     this._record({ op: 'removePage', pageId });
+    return page;
+  }
+
+  /**
+   * Sayfayı ÇOĞALTIR — düğümleriyle birlikte, yeni kimliklerle.
+   *
+   * Kimlikler yenilenmezse iki sayfada aynı kimlikli düğümler olur; `find`
+   * ilkini bulur ve kullanıcı ikinci sayfadaki nesneyi seçtiğinde birincisi
+   * hareket eder. Bu, "çalışıyor gibi görünen" en sinsi hata sınıfıdır.
+   *
+   * @param {string} pageId
+   * @returns {Object|null} yeni sayfa
+   */
+  duplicatePage(pageId) {
+    const index = this.doc.pages.findIndex((p) => p.id === pageId);
+    if (index < 0) return null;
+    const source = this.doc.pages[index];
+
+    const reid = (nodes) => nodes.map((n) => {
+      const copy = clone(n);
+      copy.id = makeId();
+      if (copy.children) copy.children = reid(copy.children);
+      return copy;
+    });
+
+    const page = {
+      id: makeId('pg'),
+      name: `${source.name} (kopya)`,
+      nodes: reid(source.nodes || [])
+    };
+    if (source.width > 0 && source.height > 0) {
+      page.width = source.width;
+      page.height = source.height;
+    }
+    if (source.background) page.background = source.background;
+
+    const at = index + 1;
+    this._step(
+      () => this.doc.pages.splice(at, 0, page),
+      () => { const i = this.doc.pages.indexOf(page); if (i >= 0) this.doc.pages.splice(i, 1); }
+    );
+    this._record({ op: 'addPage', options: { id: page.id, name: page.name, index: at } });
+    this._recordPage(page);
+    return page;
+  }
+
+  /**
+   * Sayfayı DÖNDÜRÜR: kâğıt döner, üzerindeki her şey onunla birlikte.
+   *
+   * Sahnede `/Rotate` diye bir alan yoktur ve olmamalıdır — sahne
+   * "görünen"i taşır, bir görüntüleyici yönergesini değil. Bu yüzden dönme
+   * GERÇEKTEN uygulanır: sayfa ölçüsü takas edilir ve her düğüm yeni
+   * koordinatına taşınır. Böylece dışa aktarılan PDF de, tuval de, imza
+   * yuvası koordinatı da aynı şeyi söyler.
+   *
+   * @param {string} pageId
+   * @param {number} degrees 90'ın katı (saat yönü)
+   */
+  rotatePage(pageId, degrees) {
+    const page = this.pageById(pageId);
+    if (!page) return null;
+
+    const turns = ((Math.round(Number(degrees) / 90) % 4) + 4) % 4;
+    if (!turns) return page;
+
+    const box = geometry.pageGeometry(this.doc, page);
+    const swap = turns === 1 || turns === 3;
+    const width = swap ? box.height : box.width;
+    const height = swap ? box.width : box.height;
+
+    // Dönme yalnız KÖK düğümlere uygulanır: grup çocuklarının koordinatları
+    // zaten grubun kendi uzayındadır ve grup dönünce onlar da döner.
+    const place = (frame, rotation) => {
+      // Merkez döner; çerçevenin ÖLÇÜSÜ değişmez. Sahne düğümü "dönmemiş
+      // çerçeve + merkez etrafında dönme"dir, bu yüzden 90°'lik bir dönme
+      // genişlik/yükseklik takası olarak değil, dönme açısı olarak yazılır.
+      let cx = frame.x + frame.width / 2;
+      let cy = frame.y + frame.height / 2;
+      for (let t = 0; t < turns; t++) {
+        // Saat yönünde 90°: (x, y) → (H − y, x). H, O ADIMDAKİ yüksekliktir
+        // ve her adımda genişlikle yer değiştirir.
+        const stepHeight = (t % 2 === 0) ? box.height : box.width;
+        const px = cx;
+        cx = stepHeight - cy;
+        cy = px;
+      }
+      // Çerçeve KENDİ ölçüsünü korur ve yeni merkezine oturur; görünen
+      // en/boy takasını dönme açısı yapar. Çerçeveyi de takas etmek,
+      // dönmenin iki kez uygulanması demek olurdu.
+      return {
+        frame: {
+          x: round(cx - frame.width / 2),
+          y: round(cy - frame.height / 2),
+          width: round(frame.width), height: round(frame.height)
+        },
+        rotation: round((((rotation || 0) + turns * 90) % 360 + 360) % 360)
+      };
+    };
+
+    const before = clone(page.nodes);
+    const prevSize = page.width > 0 ? { width: page.width, height: page.height } : null;
+
+    const rotated = (page.nodes || []).map((n) => {
+      const copy = clone(n);
+      const p = place(n.frame, n.rotation);
+      copy.frame = p.frame;
+      copy.rotation = p.rotation;
+      return copy;
+    });
+
+    this._step(
+      () => {
+        page.nodes = rotated;
+        page.width = round(width);
+        page.height = round(height);
+      },
+      () => {
+        page.nodes = clone(before);
+        if (prevSize) { page.width = prevSize.width; page.height = prevSize.height; }
+        else { delete page.width; delete page.height; }
+      }
+    );
+    // Ortak oturumda İKİSİ de bildirilir: yalnız düğümleri göndermek, karşı
+    // tarafta dönmüş içeriği dönmemiş kâğıda basmak olurdu.
+    this._record({
+      op: 'setPageSize', pageId: page.id,
+      size: { width: page.width, height: page.height }
+    });
+    this._recordPage(page);
+    return page;
+  }
+
+  /**
+   * Sayfanın kendi ölçüsünü belirler (`null` → belgenin ölçüsüne dön).
+   *
+   * Düğümler TAŞINMAZ: kâğıdı büyütmek içeriği hareket ettirmez. İçeriği
+   * yeniden konumlandırmak kullanıcının kararıdır, kâğıt seçiminin yan
+   * etkisi değil.
+   */
+  setPageSize(pageId, size) {
+    const page = this.pageById(pageId);
+    if (!page) return null;
+
+    const prev = page.width > 0 ? { width: page.width, height: page.height } : null;
+    const next = size && size.width > 0 && size.height > 0
+      ? { width: round(size.width), height: round(size.height) }
+      : null;
+    if (JSON.stringify(prev) === JSON.stringify(next)) return page;
+
+    this._step(
+      () => {
+        if (next) { page.width = next.width; page.height = next.height; }
+        else { delete page.width; delete page.height; }
+      },
+      () => {
+        if (prev) { page.width = prev.width; page.height = prev.height; }
+        else { delete page.width; delete page.height; }
+      }
+    );
+    this._record({ op: 'setPageSize', pageId: page.id, size: next });
     return page;
   }
 

@@ -36,6 +36,9 @@ const OPS = {
   removePage: ['pageId'],
   movePage:   ['pageId', 'index'],
   replacePage: ['pageId', 'nodes'],
+  // `size` boş bırakılabilir (`null` → belgenin ölçüsüne dön); bu yüzden
+  // zorunlu alan listesinde YOKTUR.
+  setPageSize: ['pageId'],
   setMeta:    ['meta'],
   setPage:    ['page']
 };
@@ -148,6 +151,13 @@ function applyOp(scene, op) {
         throw new OpError('ERR_OP_FIELD', 'replacePage düğüm dizisi ister', op);
       }
       return scene.replacePageNodes(op.pageId, op.nodes);
+    }
+
+    case 'setPageSize': {
+      if (!scene.pages.some((p) => p.id === op.pageId)) {
+        throw new OpError('ERR_OP_MISSING', `Sayfa yok: ${op.pageId}`, op);
+      }
+      return scene.setPageSize(op.pageId, op.size || null);
     }
 
     case 'setMeta':

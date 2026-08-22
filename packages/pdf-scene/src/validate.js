@@ -416,6 +416,33 @@ class Validator {
     }
 
     const out = { id, name: this.str(`${path}.name`, { maxLength: 256 }, raw.name || `Sayfa ${index + 1}`) };
+
+    /**
+     * SAYFAYA ÖZGÜ ÖLÇÜ — belgenin geneline uymayan sayfalar için.
+     *
+     * Gerçek belgelerde sayfa boyutu tek değildir: bir sözleşmenin arasına
+     * yatay bir tablo, bir raporun sonuna A3 bir kroki girer. Tek bir belge
+     * ölçüsü dayatmak, içe aktarılan böyle bir sayfayı ya kırpar ya esnetir.
+     *
+     * Verilmezse belgenin `page` geometrisi geçerlidir; yani eski sahneler
+     * ve elle yazılmış JSON'lar aynı şekilde çalışır.
+     */
+    if (raw.width !== undefined || raw.height !== undefined) {
+      if (raw.width === undefined || raw.height === undefined) {
+        // Yarım bir ölçü (yalnız genişlik) belgeninkiyle karışırdı; hangi
+        // yüksekliğin geçerli olduğunu okuyan kimse bilemezdi.
+        this.fail(`${path}.width`, 'ERR_PAGE_SIZE',
+          'Sayfaya özgü ölçüde genişlik ve yükseklik BİRLİKTE verilmelidir');
+      } else {
+        const w = this.len(`${path}.width`, { min: 1, max: 20_000 }, raw.width);
+        const h = this.len(`${path}.height`, { min: 1, max: 20_000 }, raw.height);
+        if (w !== undefined && h !== undefined) {
+          out.width = units.round(w);
+          out.height = units.round(h);
+        }
+      }
+    }
+
     if (raw.background !== undefined) {
       const rgb = parseColor(raw.background);
       if (!rgb) this.fail(`${path}.background`, 'ERR_COLOR', 'Renk çözümlenemedi');
@@ -483,8 +510,18 @@ class Validator {
       [width, height] = PAGE_SIZES.A4;
     }
 
-    if (g.orientation === 'landscape' && height > width) [width, height] = [height, width];
-    if (g.orientation === 'portrait' && width > height) [width, height] = [height, width];
+    /**
+     * YÖN, VERİLDİYSE ölçüyü çevirir.
+     *
+     * Verilmediyse ölçüye DOKUNULMAZ ve yön ondan okunur. Aksi hâlde
+     * `{ size: { width: 842, height: 595 } }` gibi açık bir yatay ölçü,
+     * varsayılan "portrait" tarafından sessizce dikeye çevrilirdi — içe
+     * aktarılan her yatay PDF'in başına gelen tam olarak buydu.
+     */
+    const wanted = g.orientation === 'landscape' || g.orientation === 'portrait'
+      ? g.orientation : null;
+    if (wanted === 'landscape' && height > width) [width, height] = [height, width];
+    if (wanted === 'portrait' && width > height) [width, height] = [height, width];
 
     const m = g.margin && typeof g.margin === 'object' ? g.margin : {};
     const margin = {};
@@ -496,7 +533,8 @@ class Validator {
 
     return {
       size: typeof g.size === 'string' ? g.size.toUpperCase() : { width: units.round(width), height: units.round(height) },
-      orientation: g.orientation === 'landscape' ? 'landscape' : 'portrait',
+      // Yön, SONUÇ ölçüsünden okunur: iki alan birbiriyle çelişemesin.
+      orientation: width > height ? 'landscape' : 'portrait',
       width: units.round(width),
       height: units.round(height),
       margin

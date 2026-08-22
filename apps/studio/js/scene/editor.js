@@ -42,9 +42,32 @@ export class SceneEditor {
     this.canvas = null;
     this.inspector = null;
     this.clipboard = null;
-    this.assets = new Map(); // assetId → { meta, bytes(Uint8Array), url }
+    /**
+     * VARLIK BAYTLARININ TEK SAHİBİ `scene.assets`tir (AssetManager).
+     *
+     * Burada yalnız GÖSTERİM adresleri tutulur: `<img src>` bir Uint8Array
+     * alamaz, nesne adresi ister. Baytları ikinci bir haritada da tutmak
+     * iki gerçek kaynağı demekti ve öyleydi: içe aktarılan sahnede baytlar
+     * yalnız editörün haritasındaydı, `scene.assets` boştu — kopyala/yapıştır
+     * varlığı bulamıyor, dışa aktarma varlığı kaybediyordu.
+     *
+     * @type {Map<string, string>} assetId → object URL
+     */
+    this.assetUrls = new Map();
+    /**
+     * Gösterime HAZIRLANMIŞ varlıklar.
+     *
+     * Fontlar nesne adresi almaz (bir `<img src>` değildir) ama yine de bir
+     * kez işlenmelidir: `FontFace` kurulumu ve aile adı okuma. Yalnız
+     * `assetUrls`e bakmak, her eşitlemede her fontu yeniden çözmek demekti.
+     *
+     * @type {Set<string>}
+     */
+    this._preparedAssets = new Set();
     this.dirty = false;
     this.lastPdf = null;
+    /** Son içe aktarmanın belge çözümlemesi (varsa). */
+    this.analysis = null;
 
     /**
      * Ortak düzenleme.
@@ -89,6 +112,10 @@ export class SceneEditor {
     this.canvas.onZoom = (zoom) => {
       if (this._zoomInput) this._zoomInput.value = String(Math.round(zoom * 100));
     };
+    this.canvas.onPageChange = () => {
+      this._renderPages();
+      if (this.onPageChange) this.onPageChange(this.currentPage);
+    };
     this.canvas.onChange = () => this._touched();
     this.canvas.onDoubleClick = (id) => this._editText(id);
     this.inspector.onChange = () => { this._touched(); this._renderPages(); };
@@ -121,7 +148,8 @@ export class SceneEditor {
       title: 'Yeni belge',
       margin: { top: 56.7, right: 51, bottom: 56.7, left: 51 }
     });
-    this.assets.clear();
+    this._releaseAssets();
+    this.analysis = null;
     this.lastPdf = null;
     this.dirty = false;
     this.canvas.attach(scene);
@@ -130,35 +158,83 @@ export class SceneEditor {
     this._status('Boş belge hazır');
   }
 
-  /** Sunucudan gelen sahneyi yükler (içe aktarma). */
-  loadScene(sceneJson, assetList = []) {
+  /**
+   * Sunucudan gelen sahneyi yükler (içe aktarma).
+   *
+   * Varlıklar sahnenin KENDİ yöneticisine yazılır; editör yalnız gösterim
+   * adreslerini üretir. Kimlik baytlardan türediği için sunucunun verdiği
+   * kimlikle burada hesaplanan aynı çıkar — çıkmazsa düğüm göndermeleri
+   * kırılırdı ve bu sessizce geçilmez.
+   *
+   * @param {Object} sceneJson
+   * @param {Array} [assetList] `{ id, mime, kind, base64 }`
+   * @param {{ analysis?: Object }} [meta]
+   */
+  loadScene(sceneJson, assetList = [], meta = {}) {
     this._releaseAssets();
 
-    for (const a of assetList) {
-      const bytes = base64ToBytes(a.base64);
-      const url = a.kind === 'font'
-        ? null
-        : URL.createObjectURL(new Blob([bytes], { type: a.mime }));
-      this.assets.set(a.id, { meta: a, bytes, url });
-      if (url) this.canvas.setAssetUrl(a.id, url);
-      if (a.kind === 'font') {
-        try {
-          const info = this.lib.readFontInfo(bytes);
-          this.canvas.embeddedFontFamilies.add(info.family);
-          this._installFontFace(info.family, bytes);
-        } catch { /* bozuk font: derleyici uyaracak */ }
+    const assets = new this.lib.AssetManager();
+    const mismatched = [];
+
+    for (const a of assetList || []) {
+      if (!a || !a.base64) continue;
+      try {
+        const added = assets.add(base64ToBytes(a.base64), { name: a.name });
+        if (a.id && a.id !== added.id) mismatched.push(a.id);
+      } catch (err) {
+        this._status(`Varlık yüklenemedi (${a.name || a.id}): ${err.message}`, 'warn');
       }
     }
 
-    const scene = this.lib.Scene.fromJSON(sceneJson);
+    const scene = this.lib.Scene.fromJSON(sceneJson, { assets });
     this.canvas.attach(scene);
+    this._syncAssetUrls();
+
+    if (mismatched.length) {
+      this._status(
+        `${mismatched.length} varlığın kimliği içerikle uyuşmadı; görselleri gözden geçirin`,
+        'warn');
+    }
+
+    this.analysis = meta.analysis || null;
     this.inspector.render();
     this._renderPages();
     this.dirty = true;
     this.lastPdf = null;
+    if (this.onAnalysis) this.onAnalysis(this.analysis);
   }
 
   get scene() { return this.canvas ? this.canvas.scene : null; }
+
+  /** Üzerinde çalışılan sayfa. */
+  get currentPage() { return this.canvas ? this.canvas.page : null; }
+
+  /** Tuval + panel + sayfa şeridini birlikte tazeler (dışarıya açık). */
+  refresh() { this._refreshAll(); }
+
+  /**
+   * Bir görsel dosyasını sahneye ekler (dosya seçici ya da sürükle-bırak).
+   * Tek giriş noktası: iki ayrı yol iki ayrı davranış demektir.
+   */
+  addImageFile(file) { return this._addImage(file); }
+
+  /**
+   * Varlıkları taşınabilir biçimde dışa verir (`{ id, name, mime, base64 }`).
+   *
+   * Sunucuya gönderim ve dosyaya kaydetme AYNI listeyi kullanır; ikisi
+   * ayrışırsa biri çalışır öteki sessizce eksik kalır.
+   */
+  exportAssets() {
+    if (!this.scene) return [];
+    const store = this.scene.assets;
+    return store.manifest().map((meta) => {
+      const bytes = store.bytes(meta.id);
+      return bytes ? {
+        id: meta.id, name: meta.name, kind: meta.kind, mime: meta.mime,
+        base64: bytesToBase64(bytes)
+      } : null;
+    }).filter(Boolean);
+  }
 
   /* ---------------------------------------------------------------- */
   /* Araç çubuğu                                                       */
@@ -233,14 +309,63 @@ export class SceneEditor {
         onclick: () => this._promptJoin()
       }),
       (this._peersEl = el('span', { class: 'sc-peers' })),
-      el('label', { class: 'field field--inline' }, [
-        el('span', { class: 'field__label', text: 'Yakınlık' }),
+      el('div', { class: 'sc-zoom' }, [
+        el('button', {
+          class: 'btn btn--icon', type: 'button', text: '−', title: 'Uzaklaştır',
+          onclick: () => this.setZoom(this.canvas.zoom - 0.1)
+        }),
         (this._zoomInput = el('input', {
-          class: 'input input--num', type: 'number', min: 15, max: 400, step: 25, value: '100',
-          onchange: (e) => this.canvas.setZoom((Number(e.target.value) || 100) / 100)
-        }))
+          class: 'input input--num', type: 'number', min: 15, max: 400, step: 5, value: '100',
+          title: 'Yakınlık (%)',
+          onchange: (e) => this.setZoom((Number(e.target.value) || 100) / 100)
+        })),
+        el('button', {
+          class: 'btn btn--icon', type: 'button', text: '+', title: 'Yakınlaştır',
+          onclick: () => this.setZoom(this.canvas.zoom + 0.1)
+        }),
+        el('button', {
+          class: 'btn btn--sm', type: 'button', text: 'Sayfa', title: 'Sayfayı sığdır',
+          onclick: () => this.fitPage()
+        }),
+        el('button', {
+          class: 'btn btn--sm', type: 'button', text: 'En', title: 'Genişliğe sığdır',
+          onclick: () => this.fitPage('width')
+        }),
+        el('button', {
+          class: 'btn btn--sm', type: 'button', text: '%100', title: 'Gerçek boyut',
+          onclick: () => this.setZoom(1)
+        })
       ])
     ]));
+  }
+
+  /**
+   * YAKINLIK yalnız GÖSTERİMDİR.
+   *
+   * Belge koordinatlarına dokunmaz: %200'de sürüklenen bir nesne de puntoyla
+   * aynı yere gider. İkisini karıştırmak, yakınlaştırınca belgesi bozulan
+   * editörlerin klasik hatasıdır.
+   */
+  setZoom(zoom) {
+    this.canvas.setZoom(zoom);
+    if (this._zoomInput) this._zoomInput.value = String(Math.round(this.canvas.zoom * 100));
+  }
+
+  /**
+   * Sayfayı görünür alana sığdırır.
+   * @param {'page'|'width'} [mode]
+   */
+  fitPage(mode = 'page') {
+    const box = this.canvas.pageBox;
+    const host = this.opts.canvasRoot;
+    if (!box.width || !host || !host.clientWidth) return;
+
+    // Kaydırma çubuğu ve kenar boşluğu için pay: tam sığdırmak, sayfayı
+    // her seferinde bir kıl payı taşırır ve kaydırma çubuğu belirir.
+    const pad = 48;
+    const byWidth = (host.clientWidth - pad) / box.width;
+    const byHeight = (host.clientHeight - pad) / box.height;
+    this.setZoom(mode === 'width' ? byWidth : Math.min(byWidth, byHeight));
   }
 
   async _toggleShare() {
@@ -268,40 +393,74 @@ export class SceneEditor {
     }
   }
 
+  /**
+   * Sayfa şeridi — küçük ölçekli GERÇEK önizleme.
+   *
+   * Numara yazan bir düğme, on sayfalı bir belgede hangi sayfanın hangisi
+   * olduğunu söylemez. Her sayfa kendi en-boy oranıyla ve üzerindeki
+   * nesnelerin kaba yerleşimiyle çizilir; bu, tam bir render değildir ve
+   * olmaya çalışmaz — amaç TANIMAKTIR.
+   */
   _renderPages() {
     const root = clear(this.opts.pagesRoot);
     if (!this.scene) return;
 
     this.scene.pages.forEach((page, index) => {
+      const box = this.lib.geometry.pageGeometry(this.scene.doc, page);
+      const active = index === this.canvas.pageIndex;
+
+      const thumb = el('div', { class: 'sc-thumb__sheet' });
+      const scale = 46 / Math.max(box.width, box.height);
+      Object.assign(thumb.style, {
+        width: `${Math.round(box.width * scale)}px`,
+        height: `${Math.round(box.height * scale)}px`
+      });
+
+      // Nesnelerin kaba izdüşümü — en fazla 60 tanesi; bir haritada
+      // 4000 kutu çizmek şeridi kilitler.
+      for (const node of (page.nodes || []).slice(0, 60)) {
+        if (node.hidden) continue;
+        const f = node.frame;
+        thumb.appendChild(el('i', {
+          class: `sc-thumb__n sc-thumb__n--${node.type}`,
+          style: `left:${f.x * scale}px;top:${f.y * scale}px;` +
+                 `width:${Math.max(1, f.width * scale)}px;` +
+                 `height:${Math.max(1, f.height * scale)}px`
+        }));
+      }
+
       root.appendChild(el('button', {
-        class: 'sc-page' + (index === this.canvas.pageIndex ? ' is-active' : ''),
-        type: 'button', text: String(index + 1), title: page.name,
-        onclick: () => { this.canvas.setPage(index); this._renderPages(); this.inspector.render(); }
-      }));
+        class: 'sc-thumb' + (active ? ' is-active' : ''),
+        type: 'button',
+        title: `${page.name} · ${Math.round(box.width)}×${Math.round(box.height)} pt`,
+        'aria-current': active ? 'page' : null,
+        onclick: () => this.setPage(index)
+      }, [thumb, el('span', { class: 'sc-thumb__no', text: String(index + 1) })]));
     });
 
     root.appendChild(el('button', {
-      class: 'sc-page sc-page--add', type: 'button', text: '+', title: 'Sayfa ekle',
+      class: 'sc-thumb sc-thumb--add', type: 'button', text: '+', title: 'Sayfa ekle',
       onclick: () => {
-        this.scene.transaction('Sayfa ekle', () => this.scene.addPage({}));
-        this.canvas.setPage(this.scene.pages.length - 1);
-        this._renderPages();
+        // Yeni sayfa, üzerinde çalışılan sayfayla AYNI ölçüde gelir:
+        // yatay bir sayfanın ardına dikey bir sayfa koymak sürpriz olurdu.
+        const box = this.canvas.pageBox;
+        this.scene.transaction('Sayfa ekle', () =>
+          this.scene.addPage({ width: box.width, height: box.height }));
+        this.setPage(this.scene.pages.length - 1);
         this._touched();
       }
     }));
+  }
 
-    if (this.scene.pages.length > 1) {
-      root.appendChild(el('button', {
-        class: 'sc-page sc-page--del', type: 'button', text: '−', title: 'Bu sayfayı sil',
-        onclick: () => {
-          const page = this.canvas.page;
-          this.scene.transaction('Sayfa sil', () => this.scene.removePage(page.id));
-          this.canvas.setPage(Math.max(0, this.canvas.pageIndex - 1));
-          this._renderPages();
-          this._touched();
-        }
-      }));
-    }
+  /**
+   * Sayfayı değiştirir.
+   *
+   * Şeridi ve paneli tazeleme işi tuvalin `onPageChange` geri çağrısındadır;
+   * burada bir kez daha yapmak, aynı DOM'u iki kez kurmak olurdu.
+   */
+  setPage(index) {
+    this.canvas.setPage(index);
+    this.inspector.render();
   }
 
   /* ---------------------------------------------------------------- */
@@ -309,7 +468,9 @@ export class SceneEditor {
   /* ---------------------------------------------------------------- */
 
   addNode(type, extra = {}) {
-    const page = this.scene.page;
+    // ÇALIŞILAN sayfanın ölçüsü — belgeninki değil. Çok ölçülü bir belgede
+    // belge ölçüsüne göre ortalamak, nesneyi yatay sayfanın dışına atardı.
+    const page = this.canvas.pageBox;
     const preset = PRESETS[type] || {};
     // Yeni nesne sayfanın ORTASINA gelir: köşeye koymak, kullanıcıyı her
     // seferinde sürüklemeye zorlar.
@@ -337,12 +498,7 @@ export class SceneEditor {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const meta = this.scene.assets.add(bytes, { name: file.name });
-
-      if (!this.assets.has(meta.id)) {
-        const url = URL.createObjectURL(new Blob([bytes], { type: meta.mime }));
-        this.assets.set(meta.id, { meta, bytes, url });
-        this.canvas.setAssetUrl(meta.id, url);
-      }
+      this._syncAssetUrls();
 
       // En-boy oranını koruyarak makul bir başlangıç boyu
       const maxSide = 200;
@@ -374,7 +530,6 @@ export class SceneEditor {
       // tuvalde "Ubuntu" yazan bir düğümün sunucuda bulunamaması demekti.
       const info = this.lib.readFontInfo(bytes);
       this.canvas.embeddedFontFamilies.add(info.family);
-      this.assets.set(meta.id, { meta, bytes, url: null });
 
       // Tuvalde de gerçekten o fontla görünsün
       await this._installFontFace(info.family, bytes);
@@ -449,21 +604,27 @@ export class SceneEditor {
     });
   }
 
-  /** Yapıştırma sonrası yeni varlıklar için görüntüleme adresi üretir. */
+  /**
+   * `scene.assets` içindeki HER varlık için gösterim adresi olmasını sağlar.
+   *
+   * İçe aktarma, yapıştırma, ortak düzenleme — hepsi sahneye varlık
+   * ekleyebilir. Tek bir eşitleyici olması, "hangi yol adres üretmeyi
+   * unuttu" sorusunu ortadan kaldırır.
+   */
   _syncAssetUrls() {
+    if (!this.scene) return;
     for (const meta of this.scene.assets.manifest()) {
-      if (this.assets.has(meta.id)) continue;
+      if (this._preparedAssets.has(meta.id)) continue;
       const bytes = this.scene.assets.bytes(meta.id);
       if (!bytes) continue;
+      this._preparedAssets.add(meta.id);
 
       // Fontlar `<img src>` ile gösterilmez; onlara nesne adresi gerekmez.
-      const url = meta.kind === 'image'
-        ? URL.createObjectURL(new Blob([bytes], { type: meta.mime }))
-        : null;
-
-      this.assets.set(meta.id, { meta, bytes, url });
-      if (url) this.canvas.setAssetUrl(meta.id, url);
-      if (meta.kind === 'font') {
+      if (meta.kind === 'image') {
+        const url = URL.createObjectURL(new Blob([bytes], { type: meta.mime }));
+        this.assetUrls.set(meta.id, url);
+        this.canvas.setAssetUrl(meta.id, url);
+      } else if (meta.kind === 'font') {
         try {
           const info = this.lib.readFontInfo(bytes);
           this.canvas.embeddedFontFamilies.add(info.family);
@@ -506,6 +667,7 @@ export class SceneEditor {
     this._releaseAssets();
     const scene = this.lib.Scene.fromJSON(res.scene);
     this.canvas.attach(scene);
+    this._syncAssetUrls();
     this._bindCollab();
     this._refreshAll();
     return res;
@@ -531,6 +693,7 @@ export class SceneEditor {
 
     // Başkasının yazdığını Ctrl+Z ile geri almak en şaşırtıcı davranıştır.
     this.scene.history.undoStack.length = depth;
+    this._syncAssetUrls();
     this._refreshAll();
   }
 
@@ -564,9 +727,10 @@ export class SceneEditor {
   async renderPdf(options = {}) {
     const payload = {
       scene: this.scene.toJSON(),
-      assets: [...this.assets.values()].map(({ meta, bytes }) => ({
-        id: meta.id, name: meta.name, base64: bytesToBase64(bytes)
-      })),
+      // Baytlar SAHNENİN yöneticisinden okunur. Editörün ayrı bir kopyasına
+      // bakmak, içe aktarılan belgelerde boş liste göndermek demekti:
+      // görseller çıktıda kayboluyordu.
+      assets: this.exportAssets(),
       // Uyum profili İSTEĞE bağlıdır ve istenmeden iddia edilmez:
       // etiketsiz bir belgeye "PDF/UA" damgası vurmak yalan olurdu.
       conformance: options.conformance || null
@@ -583,9 +747,16 @@ export class SceneEditor {
   /* ---------------------------------------------------------------- */
 
   _refreshAll() {
+    // Sayfa silinmiş ya da taşınmış olabilir; sıra sınırların dışında
+    // kalırsa tuval boş görünür ve kullanıcı belgesini kaybettiğini sanır.
+    if (this.scene) {
+      this.canvas.pageIndex =
+        Math.max(0, Math.min(this.scene.pages.length - 1, this.canvas.pageIndex));
+    }
     this.canvas.render();
     this.inspector.render();
     this._renderPages();
+    if (this.onPageChange) this.onPageChange(this.currentPage);
     this._touched();
   }
 
@@ -599,10 +770,20 @@ export class SceneEditor {
     if (this.opts.onStatus) this.opts.onStatus(message, kind);
   }
 
+  /**
+   * Gösterim kaynaklarını bırakır.
+   *
+   * Nesne adresleri elle iptal edilmezse sayfa kapanana kadar bellekte
+   * kalır: on belge açan bir kullanıcı on belgenin görsellerini taşır.
+   */
   _releaseAssets() {
-    for (const a of this.assets.values()) if (a.url) URL.revokeObjectURL(a.url);
-    this.assets.clear();
-    this.canvas.embeddedFontFamilies.clear();
+    for (const url of this.assetUrls.values()) URL.revokeObjectURL(url);
+    this.assetUrls.clear();
+    this._preparedAssets.clear();
+    if (this.canvas) {
+      this.canvas.assetUrls.clear();
+      this.canvas.embeddedFontFamilies.clear();
+    }
   }
 }
 

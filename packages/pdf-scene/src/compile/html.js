@@ -403,24 +403,29 @@ function compileToHtml(sceneInput, o = {}) {
   const ctx = { assetUrl, qrUrl };
   const m = scene.page.margin;
 
-  const pageEls = scene.pages.map((page, index) => el('section', {
-    class: 'sn-page', 'data-page': String(index), 'data-id': page.id,
-    'aria-label': page.name,
-    style: style({
-      width: scene.page.width, height: scene.page.height,
-      background: page.background || '#ffffff'
-    })
-  }, [
-    o.showMargins ? el('div', {
-      class: 'sn-guides',
+  const pageEls = scene.pages.map((page, index) => {
+    // Sayfaya özgü ölçü varsa o geçerlidir; önizleme PDF ile aynı kâğıdı
+    // göstermelidir, yoksa yatay bir sayfa dikey kutuya sıkışmış görünür.
+    const geo = geometry.pageGeometry(scene, page);
+    return el('section', {
+      class: 'sn-page', 'data-page': String(index), 'data-id': page.id,
+      'aria-label': page.name,
       style: style({
-        position: 'absolute', left: m.left, top: m.top,
-        width: scene.page.width - m.left - m.right,
-        height: scene.page.height - m.top - m.bottom
+        width: geo.width, height: geo.height,
+        background: page.background || '#ffffff'
       })
-    }) : null,
-    ...page.nodes.map((n) => nodeElement(n, ctx)).filter(Boolean)
-  ]));
+    }, [
+      o.showMargins ? el('div', {
+        class: 'sn-guides',
+        style: style({
+          position: 'absolute', left: m.left, top: m.top,
+          width: geo.width - m.left - m.right,
+          height: geo.height - m.top - m.bottom
+        })
+      }) : null,
+      ...page.nodes.map((n) => nodeElement(n, ctx)).filter(Boolean)
+    ]);
+  });
 
   const body = el('div', { class: 'sn-doc' }, pageEls);
 

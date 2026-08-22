@@ -23,6 +23,7 @@
     "test": "node --test 'test/unit/**/*.test.js'",
     "test:e2e": "node --test 'test/e2e/**/*.test.js'",
     "test:all": "node --test 'test/**/*.test.js'",
+    "test:studio": "node scripts/studio-smoke.js",
     "fixtures": "npm run fixtures:pkcs12 && npm run fixtures:pdf",
     "fixtures:pkcs12": "bash test/fixtures/pkcs12/generate.sh",
     "fixtures:pdf": "node test/fixtures/pdf/generate.js",

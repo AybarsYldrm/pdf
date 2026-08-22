@@ -122,6 +122,34 @@ function rotatedBounds(frame, rotation) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Sayfa ölçüsü                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Bir SAYFANIN etkin ölçüsü.
+ *
+ * Sayfa kendi `width`/`height` değerini taşıyorsa o geçerlidir; taşımıyorsa
+ * belgenin geneli. Gerçek belgelerde sayfa boyutu tek değildir — bir
+ * sözleşmenin arasına yatay bir tablo, bir raporun sonuna A3 bir kroki
+ * girer — ve tek ölçü dayatmak içe aktarılan böyle bir sayfayı ya kırpar
+ * ya esnetir.
+ *
+ * Kenar boşluğu HER ZAMAN belgeden gelir: sayfaya özgü ölçü bir istisnadır,
+ * belgenin yerleşim düzenini bozmak için değil.
+ *
+ * @param {Object} doc sahne belgesi (`{ page, pages }`)
+ * @param {Object} page sayfa nesnesi
+ * @returns {{width:number, height:number, margin:Object}}
+ */
+function pageGeometry(doc, page) {
+  const base = (doc && doc.page) || {};
+  if (page && page.width > 0 && page.height > 0) {
+    return { width: page.width, height: page.height, margin: base.margin };
+  }
+  return { width: base.width, height: base.height, margin: base.margin };
+}
+
+/* ------------------------------------------------------------------ */
 /* Sahne ağacı geometrisi                                              */
 /* ------------------------------------------------------------------ */
 
@@ -395,6 +423,7 @@ const snapToGrid = (value, step) =>
 module.exports = {
   IDENTITY, multiply, translate, scale, rotate, apply, invert,
   rect, center, union, intersects, contains, containsPoint, rotatedBounds,
+  pageGeometry,
   absoluteFrame, boundsOf, pathBounds, fitPath,
   ALIGNMENTS, align, distribute,
   snap, snapToGrid

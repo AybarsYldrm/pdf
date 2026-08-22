@@ -16,6 +16,7 @@
  */
 
 const { tokenizeContent } = require('@fitfak/pdf-doc');
+const pagespace = require('../pagespace');
 
 /** Yuvalanmış form XObject derinliği. */
 const MAX_FORM_DEPTH = 8;
@@ -26,21 +27,10 @@ const MAX_RECORDS = 20_000;
 /** Tek yolda en fazla segment. */
 const MAX_SEGMENTS = 20_000;
 
-const IDENTITY = [1, 0, 0, 1, 0, 0];
-
-/** m2'yi m1'in üzerine uygular (PDF `cm` semantiği: yeni = m2 × mevcut). */
-function concat(m2, m1) {
-  return [
-    m2[0] * m1[0] + m2[1] * m1[2],
-    m2[0] * m1[1] + m2[1] * m1[3],
-    m2[2] * m1[0] + m2[3] * m1[2],
-    m2[2] * m1[1] + m2[3] * m1[3],
-    m2[4] * m1[0] + m2[5] * m1[2] + m1[4],
-    m2[4] * m1[1] + m2[5] * m1[3] + m1[5]
-  ];
-}
-
-const applyM = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+// Matris ve sayfa uzayı hesabı `../pagespace`tedir: PDF ile sahne arasındaki
+// dönüşümün TEK bir uygulaması olsun diye. Burada yeniden yazmak, iki
+// uygulamanın zamanla ayrışması demektir.
+const { IDENTITY, concat, applyM } = pagespace;
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -357,67 +347,9 @@ function runContent(doc, content, resources, o) {
   }
 }
 
-/**
- * PDF kullanıcı uzayı → sahne uzayı matrisi.
- *
- * Üç şeyi BİRLİKTE çözer, çünkü ayrı ayrı uygulamak sıra hatası davetidir:
- *   1. y ekseni: PDF'te yukarı, sahnede aşağı büyür.
- *   2. Kırpma kutusu: sol-alt köşe (0,0) olmayabilir.
- *   3. `/Rotate`: görüntüleyici sayfayı saat yönünde döndürerek gösterir;
- *      içe aktarılan sahne KULLANICININ GÖRDÜĞÜ yerleşim olmalıdır.
- */
-function pageMatrix(geo) {
-  const x0 = geo.cropBox ? geo.cropBox[0] : 0;
-  const y0 = geo.cropBox ? geo.cropBox[1] : 0;
-  const w = geo.rawWidth !== undefined ? geo.rawWidth : geo.width;
-  const h = geo.rawHeight !== undefined ? geo.rawHeight : geo.height;
-
-  switch (geo.rotate || 0) {
-    case 90:  return [0, 1, 1, 0, -y0, -x0];
-    case 180: return [-1, 0, 0, 1, w + x0, -y0];
-    case 270: return [0, -1, -1, 0, h + y0, w + x0];
-    default:  return [1, 0, 0, -1, -x0, h + y0];
-  }
-}
-
-/**
- * Birim kareyi dönüştüren matristen sahne yerleşimi çıkarır.
- *
- * PDF'te görsel her zaman BİRİM KAREYE çizilir; nereye ve ne kadar
- * büyüklükte düştüğünü matris söyler. Görsel uzayında v=1 görselin ÜST
- * satırıdır — bu yüzden sol üst köşe (0,1) noktasıdır.
- *
- * @returns {{x,y,width,height,rotation,skewed:boolean,mirrored:boolean}}
- */
-function placeUnitSquare(m) {
-  const corner = applyM(m, 0, 1);                   // görselin SOL ÜST köşesi
-  const right = [m[0], m[1]];                       // (1,1) − (0,1)
-  const down = [-m[2], -m[3]];                      // (0,0) − (0,1)
-
-  const width = Math.hypot(right[0], right[1]);
-  const height = Math.hypot(down[0], down[1]);
-  const rotation = (Math.atan2(right[1], right[0]) * 180) / Math.PI;
-
-  // Sahne düğümü DÖNMEMİŞ bir çerçeve + kendi merkezi etrafında dönme
-  // olarak tanımlıdır. Dönmüş dikdörtgenin köşesini doğrudan `x/y` yazmak,
-  // dönme uygulanınca nesneyi kaydırırdı; bu yüzden merkez üzerinden
-  // dönmemiş çerçeve hesaplanır.
-  const cx = corner[0] + (right[0] * 0.5) + (down[0] * 0.5);
-  const cy = corner[1] + (right[1] * 0.5) + (down[1] * 0.5);
-
-  // Dik olmayan (eğrilmiş) matrisler dikdörtgen çerçeveye sığmaz; sahnede
-  // eğrilme yoktur, bu yüzden yalnız bildirilir.
-  const dot = right[0] * down[0] + right[1] * down[1];
-  const scaleRef = Math.max(1e-6, width * height);
-  const cross = right[0] * down[1] - right[1] * down[0];
-
-  return {
-    x: cx - width / 2, y: cy - height / 2, width, height,
-    rotation: ((rotation % 360) + 360) % 360,
-    skewed: Math.abs(dot) / scaleRef > 0.01,
-    mirrored: cross < 0
-  };
-}
+// `pageMatrix` ve `placeUnitSquare` sayfa uzayı modülünündür; buradan yalnız
+// yeniden dışa açılırlar (eski çağıranlar kırılmasın diye).
+const { pageMatrix, placeUnitSquare } = pagespace;
 
 /** Kaynak sözlüğünden adlandırılmış bir nesneyi çözer. */
 function lookup(doc, resources, category, name) {

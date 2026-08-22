@@ -700,13 +700,17 @@ function compileToPdf(sceneInput, o = {}) {
   const pagePlans = [];
 
   for (const [index, page] of scene.pages.entries()) {
+    // Sayfanın KENDİ ölçüsü varsa o geçerlidir. Belgenin geneline uymayan
+    // sayfalar (araya giren yatay tablo, sondaki A3 kroki) böylece kırpılmaz
+    // ya da esnetilmez; içe aktarılan çok ölçülü PDF'ler aynen korunur.
+    const geo = geometry.pageGeometry(scene, page);
     const collected = collectItems(scene, page, ctx);
     const items = [];
 
     if (page.background) {
       items.push({
         type: 'rect', x: 0, y: 0,
-        width: scene.page.width, height: scene.page.height,
+        width: geo.width, height: geo.height,
         // Sayfa zemini İÇERİK değildir; okunacak bir şey taşımaz.
         fill: page.background, opacity: 1, rotation: 0, artifact: true
       });
@@ -732,7 +736,7 @@ function compileToPdf(sceneInput, o = {}) {
     }
     pagePlans.push(plan);
 
-    pages.push({ index, items, links: collected.links, slots: collected.slots });
+    pages.push({ index, items, links: collected.links, slots: collected.slots, geo });
     warnings.push(...collected.warnings.map((w) => ({ ...w, page: index })));
 
     // Yuvalar iki koordinat sisteminde birden bildirilir:
@@ -742,14 +746,14 @@ function compileToPdf(sceneInput, o = {}) {
     // bir yerde ters yapılması demektir.
     manifestPages.push({
       index, id: page.id, name: page.name,
-      width: scene.page.width, height: scene.page.height,
+      width: geo.width, height: geo.height,
       slots: collected.slots.map((s) => ({
         ...s,
         page: index,
         origin: 'bottom-left',
         rect: {
           x: s.rect.x,
-          y: round(scene.page.height - s.rect.y - s.rect.height),
+          y: round(geo.height - s.rect.y - s.rect.height),
           width: s.rect.width,
           height: s.rect.height
         },
@@ -813,7 +817,7 @@ function compileToPdf(sceneInput, o = {}) {
 
   for (const p of pages) {
     const { content, usedFonts, usedImages } =
-      buildContent(p.items, scene.page.height, { images: imageRefs, tagged });
+      buildContent(p.items, p.geo.height, { images: imageRefs, tagged });
     const contentId = emitter.addStream({}, content);
 
     const fontDict = [...usedFonts].map((id) => `/${id} ${fontRefs.get(id)} 0 R`).join(' ');
@@ -822,7 +826,7 @@ function compileToPdf(sceneInput, o = {}) {
 
     const annots = [];
     for (const link of p.links) {
-      const y1 = scene.page.height - link.rect.y - link.rect.height;
+      const y1 = p.geo.height - link.rect.y - link.rect.height;
       annots.push(`${emitter.add({ dict: {
         Type: '/Annot', Subtype: '/Link',
         Rect: `[${fmt(link.rect.x)} ${fmt(y1)} ` +
@@ -835,7 +839,7 @@ function compileToPdf(sceneInput, o = {}) {
     const pageDict = {
       Type: '/Page',
       Parent: `${pagesRootId} 0 R`,
-      MediaBox: `[0 0 ${fmt(scene.page.width)} ${fmt(scene.page.height)}]`,
+      MediaBox: `[0 0 ${fmt(p.geo.width)} ${fmt(p.geo.height)}]`,
       Resources: PdfEmitter.dictToString({
         ProcSet: '[/PDF /Text /ImageC /ImageB]',
         Font: fontDict ? `<< ${fontDict} >>` : undefined,
